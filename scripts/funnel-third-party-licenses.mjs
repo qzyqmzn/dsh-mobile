@@ -165,7 +165,7 @@ async function main() {
   const embeddedDigest = existing.match(/^Source binary SHA-256: ([a-f0-9]{64})$/mu)?.[1]
   const executableDigest = sha256(await readFile(executable))
   if (embeddedDigest !== executableDigest) {
-    throw new Error('FUNNEL_THIRD_PARTY_LICENSES.txt is stale; run npm run generate:funnel-licenses')
+    throw new Error(`Funnel executable SHA-256 does not match FUNNEL_THIRD_PARTY_LICENSES.txt (recorded: ${embeddedDigest ?? 'missing'}, actual: ${executableDigest}); run npm run generate:funnel-licenses`)
   }
   const moduleCount = existing.match(/^Embedded third-party modules: ([1-9]\d*)$/mu)?.[1]
   if (moduleCount === undefined || Number(moduleCount) !== (existing.match(/^Module: /gmu) ?? []).length) {
@@ -183,7 +183,7 @@ async function main() {
   if (process.argv.includes('--full-check')) {
     const generated = await generate()
     if (existing !== generated) {
-      throw new Error('FUNNEL_THIRD_PARTY_LICENSES.txt is stale; run npm run generate:funnel-licenses')
+      throw new Error('FUNNEL_THIRD_PARTY_LICENSES.txt content differs from the verified module licenses; run npm run generate:funnel-licenses')
     }
   }
   console.log(`Funnel third-party licenses ok: ${moduleCount} modules`)

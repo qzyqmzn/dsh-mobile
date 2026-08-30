@@ -18,7 +18,8 @@ await execFile(go, [
   'build',
   '-trimpath',
   '-buildvcs=false',
-  '-ldflags=-s -w',
+  // Omit build-cache action IDs; retain module metadata for license verification.
+  '-ldflags=-s -w -buildid=',
   '-o',
   output,
   '.',
