@@ -63,6 +63,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -97,18 +100,14 @@ jobs:
         run: bash ./gradlew --no-daemon :app:dependencies --configuration releaseRuntimeClasspath > "$GITHUB_WORKSPACE/dsh-mobile-android-${GITHUB_REF_NAME}-dependencies.txt"
         working-directory: apps/mobile/android
       - name: Verify Android signature
+        shell: bash
         run: |
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -x "$apksigner"
           apk="apps/mobile/android/app/build/outputs/apk/release/app-release.apk"
           report="$RUNNER_TEMP/dsh-mobile-apksigner.txt"
           "$apksigner" verify --verbose --print-certs "$apk" | tee "$report"
-          mapfile -t signer_digests < <(awk '/^Signer #[0-9]+ certificate SHA-256 digest:/ { print tolower($NF) }' "$report")
-          expected="f46bbee7dbe47d18f49f95f940e1d368f0b79bd8ad9d15d488337fba51e92e87"
-          if [ "${#signer_digests[@]}" -ne 1 ] || [ "${signer_digests[0]:-}" != "$expected" ]; then
-            echo "Android APK must have exactly one signer with the established release certificate." >&2
-            exit 1
-          fi
+          node scripts/verify-android-signature.mjs < "$report"
       - name: Enforce Android package size
         run: |
           apk="apps/mobile/android/app/build/outputs/apk/release/app-release.apk"
