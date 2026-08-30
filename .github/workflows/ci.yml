@@ -39,6 +39,9 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+      - name: Install pnpm for Windows updater smoke test
+        if: runner.os == 'Windows'
+        run: npm install --global pnpm@10.10.0
       - run: npm ci
       - run: npm run verify
 
