@@ -62,8 +62,22 @@ jobs:
       - run: go vet ./...
         working-directory: native/funnel-host
       - run: npm run build:funnel-host
+      - name: Record Funnel build metadata
+        run: |
+          sha256sum bin/dsh-mobile-funnel-win32-x64.exe
+          go version -m bin/dsh-mobile-funnel-win32-x64.exe | tee dsh-mobile-funnel-build-metadata.txt
       - run: npm run check:funnel-licenses:full
       - run: git diff --exit-code -- bin/dsh-mobile-funnel-win32-x64.exe FUNNEL_THIRD_PARTY_LICENSES.txt
+      - name: Preserve failed Funnel rebuild for comparison
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: funnel-rebuild-diagnostics
+          path: |
+            bin/dsh-mobile-funnel-win32-x64.exe
+            FUNNEL_THIRD_PARTY_LICENSES.txt
+            dsh-mobile-funnel-build-metadata.txt
+          if-no-files-found: error
 
   android:
     name: Android
