@@ -76,6 +76,7 @@
     <string name="blocked_navigation">已阻止跳转\n目标不是 HTTPS，或不是由你主动打开。请仅打开可信的 HTTPS 链接。</string>
     <string name="no_browser">无法打开链接\n系统中没有可用浏览器。请安装或启用浏览器后重试。</string>
     <string name="choose_file">选择文件</string>
+    <string name="take_photo">拍照</string>
     <string name="choose_download_destination">保存下载</string>
     <string name="download_blocked">已阻止下载\n文件不来自当前连接的 DSH。请仅下载当前 DSH 提供的文件。</string>
     <string name="download_in_progress">正在下载…</string>

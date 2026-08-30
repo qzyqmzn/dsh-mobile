@@ -1,5 +1,28 @@
 import { describe, expect, it } from 'vitest'
-import { applyNativeMobileLanguageMarker, dispatchComposerImageDrop, installNativeMobileSurface, isComposerMediaOriginCurrent, NATIVE_MOBILE_STYLES, preflightComposerImageDrop, resolveNativeMobileLanguage, shouldAutoLoadEarlier } from '../src/native-mobile.js'
+import { applyNativeMobileLanguageMarker, dispatchComposerImageDrop, installNativeMobileSurface, isComposerMediaOriginCurrent, markNativeMobileSettings, NATIVE_MOBILE_STYLES, preflightComposerImageDrop, resolveNativeMobileFrame, resolveNativeMobileLanguage, shouldAutoLoadEarlier } from '../src/native-mobile.js'
+
+interface FakeElementOptions {
+  readonly children?: readonly HTMLElement[]
+  readonly descendants?: readonly HTMLElement[]
+}
+
+function fakeElement(classes: readonly string[], options: FakeElementOptions = {}): HTMLElement {
+  const attributes = new Map<string, string>()
+  return {
+    children: options.children ?? [],
+    classList: classes,
+    dataset: {},
+    querySelectorAll: () => options.descendants ?? [],
+    setAttribute: (name: string, value: string) => { attributes.set(name, value) },
+    getAttribute: (name: string) => attributes.get(name) ?? null,
+  } as unknown as HTMLElement
+}
+
+function fakeRoot(elements: readonly HTMLElement[], dialogs: readonly HTMLElement[] = []): ParentNode {
+  return {
+    querySelectorAll: (selector: string) => selector === '[role="dialog"]' ? dialogs : elements,
+  } as unknown as ParentNode
+}
 
 describe('native mobile presentation', () => {
   it('keeps touch focus quiet without removing keyboard focus globally', () => {
@@ -56,6 +79,43 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('[class*="_rowActions"] { flex:0 0 auto !important; flex-wrap:nowrap !important')
     expect(NATIVE_MOBILE_STYLES).toContain('[class*="_rowActions"] button { flex:none !important; width:auto !important; min-width:44px !important')
     expect(NATIVE_MOBILE_STYLES).toContain('white-space:nowrap !important; word-break:keep-all !important; writing-mode:horizontal-tb !important')
+  })
+
+  it('keeps unrelated feature frames from suppressing the dedicated mobile layout', () => {
+    const unrelatedFrame = fakeElement(['QuestionComposer_a1_frame'], {
+      descendants: [fakeElement(['QuestionComposer_a1_body'])],
+    })
+    const sidebar = fakeElement(['AppFrame_b2_sidebarCol'])
+    const center = fakeElement(['AppFrame_b2_centerCol'])
+    const stockFrame = fakeElement(['AppFrame_b2_frame'], { descendants: [sidebar, center] })
+    const dedicatedCenter = fakeElement(['dshm-main'])
+    const root = fakeRoot([unrelatedFrame, stockFrame])
+
+    expect(resolveNativeMobileFrame(root, dedicatedCenter)).toBeUndefined()
+    expect(resolveNativeMobileFrame(root, undefined)).toBe(stockFrame)
+  })
+
+  it('marks settings dialogs independently from the conversation shell', () => {
+    const navList = fakeElement(['SettingsRoot_a1_navList'])
+    const nav = fakeElement(['SettingsRoot_a1_nav'], { descendants: [navList] })
+    const header = fakeElement(['SettingsRoot_a1_header'])
+    const options = fakeElement(['SettingsRoot_a1_options'])
+    const content = fakeElement(['SettingsRoot_a1_content'], { descendants: [header, options] })
+    const settings = fakeElement(['SettingsRoot_a1_root'], { children: [nav, content] })
+    const unrelatedDialog = fakeElement(['QuestionDialog_b2_root'], { children: [fakeElement(['QuestionDialog_b2_body'])] })
+
+    expect(markNativeMobileSettings(fakeRoot([], [unrelatedDialog, settings]))).toBe(1)
+    expect(settings.dataset.dshMobileSettings).toBe('true')
+    expect(nav.dataset.dshMobileSettingsNav).toBe('true')
+    expect(content.dataset.dshMobileSettingsContent).toBe('true')
+    expect(navList.getAttribute('data-dsh-mobile-settings-list')).toBe('true')
+    expect(header.getAttribute('data-dsh-mobile-settings-header')).toBe('true')
+    expect(options.getAttribute('data-dsh-mobile-settings-options')).toBe('true')
+  })
+
+  it('uses the DSH semantic text token for the compact log action in both themes', () => {
+    expect(NATIVE_MOBILE_STYLES).toContain('[class*="_sessionLogButton"]::after { color:var(--dsw-alias-label-primary, #171a21)')
+    expect(NATIVE_MOBILE_STYLES).not.toContain('color:var(--dsw-text, #171a21)')
   })
 
   it('preflights the official document DnD contract and drops only when it reports copy', () => {

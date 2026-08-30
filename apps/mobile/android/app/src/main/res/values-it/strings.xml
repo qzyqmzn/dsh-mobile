@@ -43,6 +43,7 @@
     <string name="open_harness_pairing">Abbina con %1$s</string>
     <plurals name="harnesses_found">
         <item quantity="one">Trovata %d installazione DSH. Selezionala per abbinarla.</item>
+        <item quantity="many">Trovate %d installazioni DSH. Selezionane una per abbinarla.</item>
         <item quantity="other">Trovate %d installazioni DSH. Selezionane una per abbinarla.</item>
     </plurals>
     <string name="pairing_key_label">Chiave di abbinamento</string>
@@ -77,6 +78,7 @@
     <string name="blocked_navigation">Navigazione bloccata\nLa destinazione non usa HTTPS oppure non è stata aperta da te. Apri solo link HTTPS attendibili.</string>
     <string name="no_browser">Impossibile aprire il link\nNon è disponibile alcun browser di sistema. Installa o abilita un browser e riprova.</string>
     <string name="choose_file">Scegli file</string>
+    <string name="take_photo">Scatta una foto</string>
     <string name="choose_download_destination">Salva download</string>
     <string name="download_blocked">Download bloccato\nIl file non proviene dal DSH attualmente connesso. Scarica solo file forniti da questo DSH.</string>
     <string name="download_in_progress">Download in corso…</string>

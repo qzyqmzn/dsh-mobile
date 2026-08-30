@@ -26,6 +26,15 @@ class PairingScanPolicyTest {
     }
 
     @Test
+    fun acceptsAUserOwnedDomainOnlyFromTheRemoteFlow() {
+        val remote = PairingScanPolicy.parse(pairingLink("dsh.example.com"), AccessMode.REMOTE)
+        val lan = PairingScanPolicy.parse(pairingLink("dsh.example.com"), AccessMode.LAN)
+
+        assertEquals(AccessMode.REMOTE, remote?.mode)
+        assertNull(lan)
+    }
+
+    @Test
     fun rejectsContentThatIsNotAPairingLink() {
         assertNull(PairingScanPolicy.parse("https://192.168.1.20:3443"))
         assertNull(PairingScanPolicy.parse("dsh1.$instanceId.$token"))

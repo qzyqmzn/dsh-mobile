@@ -2,6 +2,8 @@
 <resources>
     <color name="app_background">#0F172A</color>
     <color name="app_surface">#1E293B</color>
+    <color name="app_surface_translucent">#F21E293B</color>
+    <color name="app_setup_scrim">#B30F172A</color>
     <color name="app_surface_tinted">#17284A</color>
     <color name="app_foreground">#F8FAFC</color>
     <color name="app_secondary">#CBD5E1</color>

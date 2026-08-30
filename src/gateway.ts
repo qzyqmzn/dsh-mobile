@@ -1478,8 +1478,16 @@ export class MobileAccessGateway {
   }
 
   private async sendExtensionResponse(response: ServerResponse, result: MobileRouteResponse, head: boolean): Promise<void> {
+    const status = result.status ?? 200
+    if (!Number.isSafeInteger(status) || status < 200 || status > 599) {
+      throw new MobileExtensionError('invalid_route_response', 'extension returned an invalid HTTP status', 500)
+    }
     const contentType = result.contentType ?? 'application/octet-stream'
-    if (!/^[\w!#$&+.^-]+\/[\w!#$&+.^-]+(?:;[\s\S]*)?$/u.test(contentType)) throw new MobileExtensionError('invalid_route_response', 'extension returned an invalid content type', 500)
+    if (contentType.length > 1024
+      || !/^[\x20-\x7e]+$/u.test(contentType)
+      || !/^[\w!#$&+.^-]+\/[\w!#$&+.^-]+(?:;[\x20-\x7e]*)?$/u.test(contentType)) {
+      throw new MobileExtensionError('invalid_route_response', 'extension returned an invalid content type', 500)
+    }
     const safeHeaders: Record<string, string> = {}
     for (const [name, value] of Object.entries(result.headers ?? {})) {
       if (!/^(?:content-disposition|cache-control|etag)$/iu.test(name) || /[\r\n]/u.test(value)) continue
@@ -1489,11 +1497,11 @@ export class MobileAccessGateway {
     if (typeof result.body === 'string' || result.body instanceof Uint8Array) {
       const body = typeof result.body === 'string' ? Buffer.from(result.body) : Buffer.from(result.body)
       if (body.byteLength > 4 * 1024 * 1024) throw new MobileExtensionError('extension_result_too_large', 'extension response is too large', 500)
-      response.writeHead(result.status ?? 200, { ...safeHeaders, 'Content-Type': contentType, 'Content-Length': body.byteLength })
+      response.writeHead(status, { ...safeHeaders, 'Content-Type': contentType, 'Content-Length': body.byteLength })
       if (head) response.end(); else response.end(body)
       return
     }
-    response.writeHead(result.status ?? 200, { ...safeHeaders, 'Content-Type': contentType })
+    response.writeHead(status, { ...safeHeaders, 'Content-Type': contentType })
     if (head) { result.body.destroy(); response.end(); return }
     await pipeline(result.body, new ByteLimitTransform(4 * 1024 * 1024), response)
   }

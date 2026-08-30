@@ -2,7 +2,7 @@ package io.github.sayach.dshmobile
 
 import java.util.Locale
 
-/** Classifies the supported remote tunnel hosts without treating LAN origins as remote. */
+/** Classifies provider and user-owned remote hosts without treating LAN origins as remote. */
 internal object RemoteHostPolicy {
     private val supportedSuffixes = listOf(
         ".ts.net",
@@ -18,10 +18,26 @@ internal object RemoteHostPolicy {
         return supportedSuffixes.any(normalized::endsWith)
     }
 
+    /** Returns whether an HTTPS host can represent a user-owned public remote endpoint. */
+    fun isRemoteCandidate(host: String): Boolean {
+        val normalized = host.lowercase(Locale.ROOT).trimEnd('.')
+        if (isSupported(normalized)) return true
+        if (normalized.isEmpty() || normalized.contains(':') || normalized == "localhost"
+            || normalized.endsWith(".local") || normalized.endsWith(".lan")
+            || normalized.endsWith(".home") || normalized.endsWith(".internal")) return false
+        val labels = normalized.split('.')
+        if (labels.size < 2 || labels.all { label -> label.all(Char::isDigit) }) return false
+        return labels.all { label ->
+            label.isNotEmpty() && label.length <= 63
+                && label.first().isLetterOrDigit() && label.last().isLetterOrDigit()
+                && label.all { character -> character.isLetterOrDigit() || character == '-' }
+        }
+    }
+
     /** Returns whether this origin is valid for the selected connection mode. */
     fun isAllowed(mode: AccessMode, host: String): Boolean = when (mode) {
-        AccessMode.LAN -> !isSupported(host)
-        AccessMode.REMOTE -> isSupported(host)
+        AccessMode.LAN -> !isRemoteCandidate(host)
+        AccessMode.REMOTE -> isRemoteCandidate(host)
     }
 
     /** Returns whether the host uses Tailscale and needs the mainland-China connectivity notice. */

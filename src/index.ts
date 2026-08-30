@@ -76,4 +76,28 @@ export {
   parseDeviceSnapshot,
 } from './storage.js'
 export type { DeviceSnapshot, DeviceStore, StoredDevice } from './storage.js'
+export { FRP_COMPONENT_RELEASES, FrpComponentManager } from './frp-component.js'
+export type { FrpComponentStatus } from './frp-component.js'
+export {
+  DEFAULT_VHOST_HTTP_PORT,
+  FrpConfigStore,
+  createFrpServerTemplate,
+  createFrpcToml,
+  parseFrpSettings,
+  validateFrpPublicOrigin,
+  validateFrpServerAddress,
+  validateFrpServerPort,
+  validateFrpToken,
+} from './frp-config.js'
+export { createRestrictedFrpServerTemplate, FRP_VHOST_HTTP_PORT } from './frp-template.js'
+export type { FrpConfigurationStatus, FrpSettings } from './frp-config.js'
+export { FrpController } from './frp.js'
+export type { FrpControllerOptions, FrpState, FrpStatus } from './frp.js'
+export { configuredRemoteProvider, JsonRemoteProviderStore, parseRemoteProviderState } from './remote.js'
+export type {
+  RemoteProvider,
+  RemoteProviderController,
+  RemoteProviderState,
+  RemoteProviderStatus,
+} from './remote.js'
 export { apply, inject, name } from './plugin.js'

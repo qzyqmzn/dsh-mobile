@@ -8,6 +8,10 @@ async function read(relativePath) {
   return readFile(resolve(root, relativePath), 'utf8')
 }
 
+async function readBinary(relativePath) {
+  return readFile(resolve(root, relativePath))
+}
+
 function singleMatch(source, pattern, label) {
   const matches = [...source.matchAll(pattern)]
   if (matches.length !== 1 || matches[0][1] === undefined) {
@@ -49,6 +53,46 @@ async function main() {
     const actualTag = process.env.GITHUB_REF_NAME
     if (actualTag !== expectedTag) {
       throw new Error(`GITHUB_REF_NAME ${JSON.stringify(actualTag)} must equal ${JSON.stringify(expectedTag)}`)
+    }
+
+    const [changelog, readme, englishReadme] = await Promise.all([
+      read('CHANGELOG.md'),
+      read('README.md'),
+      read('README.en.md'),
+    ])
+    const escapedVersion = packageVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const finalizedHeading = new RegExp(`^## ${escapedVersion} - \\d{4}-\\d{2}-\\d{2}$`, 'mu')
+    if (!finalizedHeading.test(changelog)) {
+      throw new Error(`CHANGELOG.md must finalize ${packageVersion} with an ISO release date before tagging`)
+    }
+    const developmentMarkers = [
+      `${packageVersion} 开发中`,
+      `${packageVersion}（开发中）`,
+      `${packageVersion} 更新（待发布）`,
+      `${packageVersion} 尚未发布`,
+      `${packageVersion} is in development`,
+      `${packageVersion} (in development)`,
+      `${packageVersion} update (unreleased)`,
+      `${packageVersion} is not published yet`,
+    ]
+    for (const [source, label] of [[readme, 'README.md'], [englishReadme, 'README.en.md']]) {
+      const marker = developmentMarkers.find(candidate => source.includes(candidate))
+      if (marker !== undefined) throw new Error(`${label} still marks ${marker} as in development`)
+      const apk = `releases/download/v${packageVersion}/dsh-mobile-android-v${packageVersion}.apk`
+      const release = `releases/tag/v${packageVersion}`
+      if (!source.includes(apk) || !source.includes(release)) {
+        throw new Error(`${label} must link the Android download and release notes for ${packageVersion}`)
+      }
+    }
+    for (const screenshot of [
+      'assets/screenshots/lan-access.png',
+      'assets/screenshots/remote-access.png',
+      'assets/screenshots/lan-access-en.png',
+      'assets/screenshots/remote-access-en.png',
+    ]) {
+      if ((await readBinary(screenshot)).byteLength === 0) {
+        throw new Error(`${screenshot} must exist and be non-empty before tagging`)
+      }
     }
     console.log(`release tag ok: ${actualTag}`)
   }

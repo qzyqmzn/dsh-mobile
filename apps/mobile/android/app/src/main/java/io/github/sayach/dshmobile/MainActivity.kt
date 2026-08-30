@@ -55,12 +55,45 @@ import kotlin.math.min
 /** Native Android shell for one authenticated DSH HTTPS origin. */
 class MainActivity : Activity() {
     private data class PendingDownload(
+        val origin: String,
         val url: String,
         val userAgent: String?,
         val mimeType: String,
         val filename: String,
         val caCertificate: ByteArray?,
-    )
+    ) {
+        fun toBundle(): Bundle = Bundle().apply {
+            putString(KEY_ORIGIN, origin)
+            putString(KEY_URL, url)
+            putString(KEY_USER_AGENT, userAgent)
+            putString(KEY_MIME_TYPE, mimeType)
+            putString(KEY_FILENAME, filename)
+            putByteArray(KEY_CA_CERTIFICATE, caCertificate?.copyOf())
+        }
+
+        companion object {
+            private const val KEY_ORIGIN = "origin"
+            private const val KEY_URL = "url"
+            private const val KEY_USER_AGENT = "user_agent"
+            private const val KEY_MIME_TYPE = "mime_type"
+            private const val KEY_FILENAME = "filename"
+            private const val KEY_CA_CERTIFICATE = "ca_certificate"
+
+            fun fromBundle(bundle: Bundle?): PendingDownload? {
+                if (bundle == null) return null
+                val origin = bundle.getString(KEY_ORIGIN) ?: return null
+                val parsedOrigin = GatewayOrigin.parse(origin) ?: return null
+                val url = bundle.getString(KEY_URL)?.takeIf { it.length in 1..8_192 } ?: return null
+                if (!GatewayUrlPolicy.isAllowedDownload(parsedOrigin, url)) return null
+                val mimeType = bundle.getString(KEY_MIME_TYPE)?.takeIf { it.length in 1..128 } ?: return null
+                val filename = bundle.getString(KEY_FILENAME)?.takeIf { it.length in 1..128 } ?: return null
+                val userAgent = bundle.getString(KEY_USER_AGENT)?.takeIf { it.length <= 1_024 }
+                val certificate = bundle.getByteArray(KEY_CA_CERTIFICATE)
+                if (certificate != null && certificate.size > 16 * 1024) return null
+                return PendingDownload(origin, url, userAgent, mimeType, filename, certificate)
+            }
+        }
+    }
 
     private data class DeferredBridgeResult(
         val requestCode: Int,
@@ -72,6 +105,7 @@ class MainActivity : Activity() {
         val bridgeState: Bundle?,
         val deferredResult: DeferredBridgeResult?,
         val deferredPermission: IntArray?,
+        val pendingDownload: PendingDownload?,
     )
 
     private val preferences by lazy { getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE) }
@@ -110,6 +144,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        cleanupStaleDownloadFiles(cacheDir)
         configureEdgeToEdgeWindow(window)
         applyStatusBarIconContrast(window, getColor(R.color.app_background))
         nearbyPermissionLimited = preferences.getBoolean(PREFERENCE_NEARBY_PERMISSION_LIMITED, false)
@@ -119,6 +154,7 @@ class MainActivity : Activity() {
         if (retainedHandoff != null) {
             deferredBridgeResult = retainedHandoff.deferredResult
             deferredBridgePermission = retainedHandoff.deferredPermission
+            pendingDownload = retainedHandoff.pendingDownload
         } else {
             savedInstanceState?.getInt(STATE_DEFERRED_BRIDGE_REQUEST, -1)?.takeIf { it >= 0 }?.let { requestCode ->
                 deferredBridgeResult = DeferredBridgeResult(
@@ -128,6 +164,7 @@ class MainActivity : Activity() {
                 )
             }
             deferredBridgePermission = savedInstanceState?.getIntArray(STATE_DEFERRED_BRIDGE_PERMISSION)
+            pendingDownload = PendingDownload.fromBundle(savedInstanceState?.getBundle(STATE_PENDING_DOWNLOAD))
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             onBackInvokedDispatcher.registerOnBackInvokedCallback(
@@ -156,6 +193,7 @@ class MainActivity : Activity() {
             outState.putParcelable(STATE_DEFERRED_BRIDGE_DATA, result.data)
         }
         deferredBridgePermission?.let { outState.putIntArray(STATE_DEFERRED_BRIDGE_PERMISSION, it) }
+        pendingDownload?.let { outState.putBundle(STATE_PENDING_DOWNLOAD, it.toBundle()) }
         super.onSaveInstanceState(outState)
     }
 
@@ -163,6 +201,7 @@ class MainActivity : Activity() {
         bridgeState = nativeBridge?.handoffForConfiguration() ?: restoredNativeBridgeState,
         deferredResult = deferredBridgeResult,
         deferredPermission = deferredBridgePermission?.copyOf(),
+        pendingDownload = pendingDownload?.let { it.copy(caCertificate = it.caCertificate?.copyOf()) },
     )
 
     @Deprecated("Activity back dispatch is retained for Android 12 and earlier.")
@@ -508,7 +547,7 @@ class MainActivity : Activity() {
         showPairing(manualHarness(connection.origin), prefilledInput = raw.trim(), autoConnect = true)
     }
 
-    private fun isRemoteTunnelHost(host: String): Boolean = RemoteHostPolicy.isSupported(host)
+    private fun isRemoteTunnelHost(host: String): Boolean = RemoteHostPolicy.isRemoteCandidate(host)
 
     private fun isOriginAllowedForAccessMode(origin: GatewayOrigin): Boolean =
         RemoteHostPolicy.isAllowed(accessMode, origin.host)
@@ -644,7 +683,7 @@ class MainActivity : Activity() {
         return card
     }
 
-    /** Pre-connection artwork: covers the whole screen (edges may crop), under a translucent white scrim. */
+    /** Pre-connection artwork: covers the whole screen (edges may crop), under a theme-aware scrim. */
     private fun addSetupArtwork(root: FrameLayout) {
         root.addView(
             ImageView(this).apply {
@@ -654,7 +693,7 @@ class MainActivity : Activity() {
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
         )
         root.addView(
-            View(this).apply { setBackgroundColor(0x99FFFFFF.toInt()) },
+            View(this).apply { setBackgroundColor(getColor(R.color.app_setup_scrim)) },
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
         )
     }
@@ -762,7 +801,12 @@ class MainActivity : Activity() {
             }
             if (existingCredential != null) {
                 val renewal = runCatching {
-                    NativeAuthClient.renew(origin, existingCredential.deviceToken, existingCredential.caCertificate)
+                    NativeAuthClient.renew(
+                        origin,
+                        existingCredential.deviceToken,
+                        existingCredential.caCertificate,
+                        existingCredential.instanceId,
+                    )
                 }
                 val renewed = renewal.getOrNull()
                 if (renewed != null) {
@@ -795,7 +839,7 @@ class MainActivity : Activity() {
                 store.clear()
             }
             if (generation != pairingGeneration) return@execute
-            runCatching { NativeAuthClient.pair(origin, key.token, certificate) }
+            runCatching { NativeAuthClient.pair(origin, key.token, certificate, key.instanceId) }
                 .onSuccess { session -> runOnUiThread {
                     if (generation != pairingGeneration) return@runOnUiThread
                     val deviceToken = session.deviceToken
@@ -805,8 +849,13 @@ class MainActivity : Activity() {
                         status.setTextColor(getColor(R.color.app_error))
                         status.setText(R.string.pairing_failed)
                         button.isEnabled = true
+                    } else if (!runCatching {
+                            store.save(DeviceCredential(session.instanceId, deviceToken, expiresAt, certificate))
+                        }.isSuccess) {
+                        status.setTextColor(getColor(R.color.app_error))
+                        status.setText(R.string.pairing_failed)
+                        button.isEnabled = true
                     } else {
-                        store.save(DeviceCredential(session.instanceId, deviceToken, expiresAt, certificate))
                         installNativeSession(
                             origin = origin,
                             session = session,
@@ -983,7 +1032,7 @@ class MainActivity : Activity() {
         if (resultCode != RESULT_OK) return
         val text = data?.getStringExtra(ScanActivity.EXTRA_QR_RESULT)?.trim().orEmpty()
         if (text.isEmpty()) return
-        val target = PairingScanPolicy.parse(text)
+        val target = PairingScanPolicy.parse(text, accessMode)
         if (target != null) {
             accessMode = target.mode
             showPairing(manualHarness(target.connection.origin), prefilledInput = text, autoConnect = true)
@@ -998,7 +1047,7 @@ class MainActivity : Activity() {
         isCurrent: () -> Boolean = { true },
         complete: () -> Unit,
     ) {
-        if (!isCurrent()) return
+        if (!isCurrent() || session.origin != origin) return
         val cookies = CookieManager.getInstance()
         cookies.setCookie(origin.serialized, "dsh_ma_session=${session.sessionToken}; Path=/; Secure; HttpOnly; SameSite=Strict") {
             if (!isCurrent()) return@setCookie
@@ -1089,7 +1138,12 @@ class MainActivity : Activity() {
                     lastFailure = null
                     instanceMismatch = false
                     return try {
-                        NativeAuthClient.renew(origin, credential.deviceToken, credential.caCertificate).also { session ->
+                        NativeAuthClient.renew(
+                            origin,
+                            credential.deviceToken,
+                            credential.caCertificate,
+                            credential.instanceId,
+                        ).also { session ->
                             if (session.instanceId != credential.instanceId) instanceMismatch = true
                         }.takeUnless { instanceMismatch }
                     } catch (failure: Exception) {
@@ -1214,7 +1268,7 @@ class MainActivity : Activity() {
             builtInZoomControls = true
             displayZoomControls = false
             mediaPlaybackRequiresUserGesture = true
-            userAgentString = "$userAgentString DSHMobile/0.1"
+            userAgentString = "$userAgentString DSHMobile/${BuildConfig.VERSION_NAME}"
         }
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         CookieManager.getInstance().apply {
@@ -1413,7 +1467,14 @@ class MainActivity : Activity() {
         val safeMime = mimeType?.substringBefore(';')?.trim()?.takeIf { MIME_TYPE.matches(it) }
             ?: "application/octet-stream"
         val guessed = android.webkit.URLUtil.guessFileName(url, contentDisposition, safeMime)
-        pendingDownload = PendingDownload(url, userAgent, safeMime, sanitizeFilename(guessed), caCertificate)
+        pendingDownload = PendingDownload(
+            origin = origin.serialized,
+            url = url,
+            userAgent = userAgent?.take(1_024),
+            mimeType = safeMime,
+            filename = sanitizeFilename(guessed),
+            caCertificate = caCertificate?.copyOf(),
+        )
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = safeMime
@@ -1434,7 +1495,7 @@ class MainActivity : Activity() {
         val request = pendingDownload ?: return
         pendingDownload = null
         val destination = data?.data
-        val origin = gatewayOrigin
+        val origin = GatewayOrigin.parse(request.origin)
         if (resultCode != RESULT_OK || destination == null || origin == null) return
         val cookieHeader = CookieManager.getInstance().getCookie(request.url)
         toast(R.string.download_in_progress)
@@ -1705,6 +1766,7 @@ class MainActivity : Activity() {
         const val STATE_DEFERRED_BRIDGE_RESULT = "deferred_bridge_result"
         const val STATE_DEFERRED_BRIDGE_DATA = "deferred_bridge_data"
         const val STATE_DEFERRED_BRIDGE_PERMISSION = "deferred_bridge_permission"
+        const val STATE_PENDING_DOWNLOAD = "pending_download"
         const val FILE_CHOOSER_REQUEST = 4101
         const val DOWNLOAD_DESTINATION_REQUEST = 4102
         const val SCAN_CAMERA_REQUEST = 4103

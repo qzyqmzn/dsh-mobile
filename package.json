@@ -1,6 +1,6 @@
 {
   "name": "dsh-mobile",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": false,
   "description": "DeepSeek Harness 移动端适配与安全访问插件，支持局域网、远程连接、Android App 和手机浏览器。",
   "type": "module",
@@ -24,16 +24,15 @@
     "lib/cli.js",
     "lib/**/*.d.mts",
     "lib/client.js",
-    "lib/client.js.map",
     "lib/mobile-layout.js",
-    "lib/mobile-layout.js.map",
+    "lib/**/*.map",
     "bin/dsh-mobile-funnel-win32-x64.exe",
     "cordis.patch.yml",
     "README.md",
     "README.en.md",
     "CHANGELOG.md",
-    "assets/brand/*.png",
     "LICENSE",
+    "FUNNEL_THIRD_PARTY_LICENSES.txt",
     "SECURITY.md",
     "THIRD_PARTY_NOTICES.md"
   ],
@@ -53,17 +52,20 @@
   "scripts": {
     "build": "tsdown",
     "build:funnel-host": "node ./scripts/build-funnel-host.mjs",
+    "check:funnel-licenses": "node ./scripts/funnel-third-party-licenses.mjs",
+    "check:funnel-licenses:full": "node ./scripts/funnel-third-party-licenses.mjs --full-check",
     "check:mobile-release": "node ./scripts/check-mobile-release.mjs",
     "check:dsh-compatibility": "node ./scripts/check-dsh-compatibility.mjs",
     "check:release-tag": "node ./scripts/check-release-version.mjs --tag-env",
     "check:version": "node ./scripts/check-release-version.mjs",
     "clean": "node ./scripts/clean.mjs",
+    "generate:funnel-licenses": "node ./scripts/funnel-third-party-licenses.mjs --write",
     "lint": "tsc --noEmit",
     "test": "vitest run --pool=threads --maxWorkers=1",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "prepack": "npm run check:version && npm run build",
-    "verify": "npm run check:version && npm run check:mobile-release && npm run typecheck && npm run test && npm run build && npm pack --dry-run"
+    "prepack": "npm run check:version && npm run check:funnel-licenses && npm run build",
+    "verify": "npm run check:version && npm run check:funnel-licenses && npm run check:mobile-release && npm run typecheck && npm run test && npm run build && npm pack --dry-run"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
@@ -89,6 +91,8 @@
     "remote-access",
     "tailscale",
     "cpolar",
+    "frp",
+    "self-hosted",
     "mobile",
     "https"
   ],

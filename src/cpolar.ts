@@ -4,6 +4,7 @@ import { createServer, type Server } from 'node:net'
 import { isAbsolute, resolve } from 'node:path'
 import type { MobileAccessControlStore } from './control.js'
 import type { MobileAccessGateway } from './gateway.js'
+import { settleRemoteResources, terminateRemoteProcess, type RemoteProviderController } from './remote.js'
 
 const MAX_LOG_BUFFER_BYTES = 64 * 1024
 const START_TIMEOUT_MS = 45_000
@@ -92,7 +93,7 @@ function withoutProxyEnvironment(environment: NodeJS.ProcessEnv): NodeJS.Process
 }
 
 /** Owns an installed cpolar client and a provider-specific DSH remote gateway. */
-export class CpolarController {
+export class CpolarController implements RemoteProviderController {
   private enabled = false
   private initialized = false
   private disposed = false
@@ -312,29 +313,14 @@ export class CpolarController {
     this.startupTimer = undefined
     const reservation = this.reservation
     this.reservation = undefined
-    await reservation?.release()
     const child = this.child
     this.child = undefined
-    if (child !== undefined && child.exitCode === null) {
-      child.kill('SIGTERM')
-      await new Promise<void>(resolveClose => {
-        let completed = false
-        const finish = (): void => {
-          if (completed) return
-          completed = true
-          clearTimeout(timer)
-          resolveClose()
-        }
-        const timer = setTimeout(() => {
-          if (child.exitCode === null) child.kill('SIGKILL')
-          finish()
-        }, 1_500)
-        timer.unref()
-        child.once('close', finish)
-      })
-    }
     const gateway = this.gatewayValue
     this.gatewayValue = undefined
-    await gateway?.close()
+    await settleRemoteResources([
+      () => reservation?.release(),
+      () => child !== undefined && child.exitCode === null ? terminateRemoteProcess(child) : undefined,
+      () => gateway?.close(),
+    ], 'cpolar resource cleanup failed')
   }
 }

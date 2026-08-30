@@ -30,7 +30,7 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-header] [class*="_headerUtilities"] { gap:2px !important; }
   [data-dsh-mobile-header] [class*="_sessionLogButton"] { width:40px; min-width:40px; padding:0 !important; overflow:hidden; color:transparent; font-size:0 !important; }
   [data-dsh-mobile-header] [class*="_sessionLogButton"] > * { display:none !important; }
-  [data-dsh-mobile-header] [class*="_sessionLogButton"]::after { color:var(--dsw-text, #171a21); content:"Log"; font-size:11px; font-weight:600; }
+  [data-dsh-mobile-header] [class*="_sessionLogButton"]::after { color:var(--dsw-alias-label-primary, #171a21); content:"Log"; font-size:11px; font-weight:600; }
   html[data-dsh-mobile-language="zh"] [data-dsh-mobile-header] [class*="_sessionLogButton"]::after { content:"日志"; }
   [data-dsh-mobile-header] [class*="_tabs"] { box-sizing:border-box !important; width:max-content !important; max-width:calc(100% - 58px) !important; min-height:28px !important; height:28px !important; margin-top:0 !important; padding-left:6px !important; padding-right:6px !important; overflow-x:auto; scrollbar-width:none; }
   [data-dsh-mobile-header] [class*="_tab"] { padding-bottom:5px !important; }
@@ -170,6 +170,35 @@ function classToken(element: Element, suffix: string): boolean {
 
 function firstByClassSuffix(root: ParentNode, suffix: string): HTMLElement | undefined {
   return Array.from(root.querySelectorAll<HTMLElement>('[class]')).find(element => classToken(element, suffix))
+}
+
+/** Find the stock DSH application frame without mistaking a feature card for the shell. */
+export function resolveNativeMobileFrame(root: ParentNode, dedicatedCenter: HTMLElement | undefined): HTMLElement | undefined {
+  if (dedicatedCenter !== undefined) return undefined
+  return Array.from(root.querySelectorAll<HTMLElement>('[class]')).find(candidate => {
+    return classToken(candidate, '_frame')
+      && firstByClassSuffix(candidate, '_sidebarCol') !== undefined
+      && firstByClassSuffix(candidate, '_centerCol') !== undefined
+  })
+}
+
+/** Mark every mounted settings dialog so its mobile layout does not depend on the conversation shell. */
+export function markNativeMobileSettings(root: ParentNode): number {
+  let marked = 0
+  for (const dialog of root.querySelectorAll<HTMLElement>('[role="dialog"]')) {
+    const children = Array.from(dialog.children) as HTMLElement[]
+    const nav = children.find(child => classToken(child, '_nav'))
+    const content = children.find(child => classToken(child, '_content'))
+    if (nav === undefined || content === undefined) continue
+    dialog.dataset.dshMobileSettings = 'true'
+    nav.dataset.dshMobileSettingsNav = 'true'
+    content.dataset.dshMobileSettingsContent = 'true'
+    firstByClassSuffix(nav, '_navList')?.setAttribute('data-dsh-mobile-settings-list', 'true')
+    firstByClassSuffix(content, '_header')?.setAttribute('data-dsh-mobile-settings-header', 'true')
+    firstByClassSuffix(content, '_options')?.setAttribute('data-dsh-mobile-settings-options', 'true')
+    marked += 1
+  }
+  return marked
 }
 
 const AUTO_HISTORY_THRESHOLD_PX = 64
@@ -609,8 +638,10 @@ export function installNativeMobileSurface(): () => void {
 
   const sync = (): void => {
     scheduled = 0
-    frame = firstByClassSuffix(document, '_frame')
     const dedicatedCenter = document.querySelector<HTMLElement>('.dshm-main') ?? undefined
+    const nextFrame = resolveNativeMobileFrame(document, dedicatedCenter)
+    if (frame !== nextFrame) frame?.removeAttribute('data-dsh-mobile-frame')
+    frame = nextFrame
     if (frame !== undefined) frame.dataset.dshMobileFrame = 'true'
     sidebar = frame === undefined
       ? document.querySelector<HTMLElement>('.dshm-drawer') ?? undefined
@@ -618,6 +649,7 @@ export function installNativeMobileSurface(): () => void {
     const center = frame === undefined ? dedicatedCenter : firstByClassSuffix(frame, '_centerCol')
     const details = frame === undefined ? undefined : firstByClassSuffix(frame, '_detailsCol')
     const handle = frame === undefined ? undefined : firstByClassSuffix(frame, '_handle')
+    markNativeMobileSettings(document)
     if (center === undefined) {
       bindHistoryScroller(undefined)
       syncMediaBinding(null)
@@ -709,24 +741,6 @@ export function installNativeMobileSurface(): () => void {
       details.dataset.dshMobileDetails = 'true'
       const lastColumn = frame?.style.gridTemplateColumns.trim().split(/\s+/).at(-1)
       details.dataset.open = String(lastColumn !== undefined && lastColumn !== '0px' && lastColumn !== '0')
-    }
-    const settings = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]')).find(dialog => {
-      const directNav = Array.from(dialog.children).find(child => child instanceof HTMLElement && classToken(child, '_nav'))
-      return directNav !== undefined
-    })
-    if (settings !== undefined) {
-      settings.dataset.dshMobileSettings = 'true'
-      const nav = Array.from(settings.children).find(child => child instanceof HTMLElement && classToken(child, '_nav')) as HTMLElement | undefined
-      const content = Array.from(settings.children).find(child => child instanceof HTMLElement && classToken(child, '_content')) as HTMLElement | undefined
-      if (nav !== undefined) {
-        nav.dataset.dshMobileSettingsNav = 'true'
-        firstByClassSuffix(nav, '_navList')?.setAttribute('data-dsh-mobile-settings-list', 'true')
-      }
-      if (content !== undefined) {
-        content.dataset.dshMobileSettingsContent = 'true'
-        firstByClassSuffix(content, '_header')?.setAttribute('data-dsh-mobile-settings-header', 'true')
-        firstByClassSuffix(content, '_options')?.setAttribute('data-dsh-mobile-settings-options', 'true')
-      }
     }
     if (sidebar === undefined) return
     sidebar.dataset.dshMobileSidebar = 'true'

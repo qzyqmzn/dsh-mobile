@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { combineSignals, MobileAccessService, MobileExtensionError, parseExtensionManifest } from '../src/extensions.js'
+import { combineSignals, EXTENSION_LIMITS, MobileAccessService, MobileExtensionError, parseExtensionManifest } from '../src/extensions.js'
 
 const contexts: Context[] = []
 const directories: string[] = []
@@ -310,6 +310,47 @@ describe('mobile extension registry', () => {
     const directory = await createExtension(root, 'export default async () => undefined')
     await writeFile(join(outside, 'secret.txt'), 'secret')
     await symlink(outside, join(directory, 'assets'), process.platform === 'win32' ? 'junction' : 'dir')
+    const context = new Context(); contexts.push(context)
+    const service = new MobileAccessService(context)
+    await service.startLocal(root, context)
+    expect(service.manifest()).toEqual([])
+    expect(service.status()).toEqual({ loaded: 0, failed: 1 })
+  })
+
+  it('rejects asset trees that exceed the aggregate file-count limit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-asset-count-')); directories.push(root)
+    const directory = await createExtension(root, 'export default async () => undefined')
+    const assets = join(directory, 'assets')
+    await mkdir(assets, { recursive: true })
+    await Promise.all(Array.from({ length: EXTENSION_LIMITS.assetFiles + 1 }, async (_, index) => {
+      await writeFile(join(assets, `${String(index).padStart(4, '0')}.txt`), '')
+    }))
+    const context = new Context(); contexts.push(context)
+    const service = new MobileAccessService(context)
+    await service.startLocal(root, context)
+    expect(service.manifest()).toEqual([])
+    expect(service.status()).toEqual({ loaded: 0, failed: 1 })
+  })
+
+  it('rejects asset trees that exceed the nesting-depth limit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-asset-depth-')); directories.push(root)
+    const directory = await createExtension(root, 'export default async () => undefined')
+    const segments = Array.from({ length: EXTENSION_LIMITS.assetDepth + 1 }, (_, index) => `level-${String(index)}`)
+    await mkdir(join(directory, 'assets', ...segments), { recursive: true })
+    const context = new Context(); contexts.push(context)
+    const service = new MobileAccessService(context)
+    await service.startLocal(root, context)
+    expect(service.manifest()).toEqual([])
+    expect(service.status()).toEqual({ loaded: 0, failed: 1 })
+  })
+
+  it('rejects asset trees that exceed the aggregate byte limit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-asset-bytes-')); directories.push(root)
+    const directory = await createExtension(root, 'export default async () => undefined')
+    const assets = join(directory, 'assets')
+    await mkdir(assets, { recursive: true })
+    const body = Buffer.alloc(7 * 1024 * 1024)
+    for (let index = 0; index < 5; index += 1) await writeFile(join(assets, `${String(index)}.bin`), body)
     const context = new Context(); contexts.push(context)
     const service = new MobileAccessService(context)
     await service.startLocal(root, context)
