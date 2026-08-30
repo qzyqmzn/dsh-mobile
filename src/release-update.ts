@@ -1,0 +1,443 @@
+import { spawn, type ChildProcess } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { createRequire } from 'node:module'
+import { DSH_MOBILE_VERSION } from './version.js'
+
+const PACKAGE_NAME = 'dsh-mobile'
+const NPM_LATEST_URL = 'https://registry.npmjs.org/dsh-mobile/latest'
+const GITHUB_LATEST_URL = 'https://github.com/saya-ch/dsh-mobile/releases/latest'
+const GITHUB_RELEASES_URL = 'https://github.com/saya-ch/dsh-mobile/releases'
+const STATUS_CACHE_MS = 10 * 60_000
+const REQUEST_TIMEOUT_MS = 8_000
+const UPDATE_TIMEOUT_MS = 120_000
+const UPDATE_TERMINATION_GRACE_MS = 1_500
+
+const NUMERIC_VERSION_IDENTIFIER = '(?:0|[1-9]\\d*)'
+const WILDCARD_VERSION_IDENTIFIER = '(?:[xX*])'
+const PARTIAL_VERSION = `(?:${WILDCARD_VERSION_IDENTIFIER}|${NUMERIC_VERSION_IDENTIFIER}(?:\\.(?:${WILDCARD_VERSION_IDENTIFIER}|${NUMERIC_VERSION_IDENTIFIER}(?:\\.(?:${WILDCARD_VERSION_IDENTIFIER}|${NUMERIC_VERSION_IDENTIFIER}))?))?)`
+const FULL_VERSION = `${NUMERIC_VERSION_IDENTIFIER}\\.${NUMERIC_VERSION_IDENTIFIER}\\.${NUMERIC_VERSION_IDENTIFIER}(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?`
+const RANGE_VERSION = `(?:${FULL_VERSION}|${PARTIAL_VERSION})`
+const COMPARATOR = new RegExp(`^(?:<=|>=|<|>|=|~|\\^)?${RANGE_VERSION}$`, 'u')
+const HYPHEN_RANGE = new RegExp(`^${RANGE_VERSION} +[-] +${RANGE_VERSION}$`, 'u')
+const DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u
+
+interface Semver {
+  readonly core: readonly [number, number, number]
+  readonly prerelease: readonly (number | string)[]
+}
+
+/** Release information safe to return through the loopback administration API. */
+export interface PluginReleaseStatus {
+  readonly installedVersion: string
+  readonly latestVersion?: string
+  readonly updateAvailable: boolean
+  readonly updateSupported: boolean
+  readonly androidVersion?: string
+  readonly androidDownloadUrl: string
+}
+
+/** Result returned after the profile package has been replaced successfully. */
+export interface PluginUpdateResult {
+  readonly installedVersion: string
+  readonly restartRequired: true
+}
+
+interface PluginReleaseManagerOptions {
+  readonly profileDirectory: string
+  readonly installedVersion?: string
+  readonly fetch?: typeof globalThis.fetch
+  readonly runUpdate?: (profileDirectory: string, version: string) => Promise<void>
+  readonly readInstalledVersion?: (profileDirectory: string) => Promise<string | undefined>
+  readonly now?: () => number
+  readonly updateProcess?: PnpmUpdateRuntime
+}
+
+interface UpdateProcessExit {
+  readonly code: number | null
+  readonly signal: NodeJS.Signals | null
+}
+
+interface UpdateProcessRequest {
+  readonly command: string
+  readonly args: readonly string[]
+  readonly cwd: string
+  readonly detached: boolean
+  readonly platform: NodeJS.Platform
+  readonly shell: false
+}
+
+interface ManagedUpdateProcess {
+  readonly completion: Promise<UpdateProcessExit>
+  readonly stderr?: NodeJS.ReadableStream
+  terminateTree(): Promise<void>
+}
+
+interface UpdateDeadline {
+  readonly promise: Promise<void>
+  cancel(): void
+}
+
+interface PnpmUpdateRuntime {
+  readonly platform?: NodeJS.Platform
+  readonly timeoutMs?: number
+  readonly windowsCommandInterpreter?: string
+  readonly start?: (request: UpdateProcessRequest) => ManagedUpdateProcess
+  readonly deadline?: (timeoutMs: number) => UpdateDeadline
+}
+
+function parseSemver(value: string): Semver | undefined {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/u.exec(value)
+  if (match === null) return undefined
+  const core = [Number(match[1]), Number(match[2]), Number(match[3])] as const
+  if (core.some(part => !Number.isSafeInteger(part))) return undefined
+  const prerelease = match[4] === undefined
+    ? []
+    : match[4].split('.').map((part): number | string => /^\d+$/u.test(part) ? Number(part) : part)
+  if (prerelease.some(part => typeof part === 'number' && !Number.isSafeInteger(part))) return undefined
+  return Object.freeze({ core, prerelease: Object.freeze(prerelease) })
+}
+
+/** Compare two strict SemVer strings, including prerelease precedence. */
+export function comparePluginVersions(left: string, right: string): number | undefined {
+  const a = parseSemver(left)
+  const b = parseSemver(right)
+  if (a === undefined || b === undefined) return undefined
+  for (let index = 0; index < a.core.length; index += 1) {
+    const difference = a.core[index]! - b.core[index]!
+    if (difference !== 0) return Math.sign(difference)
+  }
+  if (a.prerelease.length === 0 || b.prerelease.length === 0) {
+    return a.prerelease.length === b.prerelease.length ? 0 : a.prerelease.length === 0 ? 1 : -1
+  }
+  const length = Math.max(a.prerelease.length, b.prerelease.length)
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = a.prerelease[index]
+    const rightPart = b.prerelease[index]
+    if (leftPart === undefined || rightPart === undefined) return leftPart === undefined ? -1 : 1
+    if (leftPart === rightPart) continue
+    if (typeof leftPart === 'number' && typeof rightPart === 'number') return Math.sign(leftPart - rightPart)
+    if (typeof leftPart === 'number') return -1
+    if (typeof rightPart === 'number') return 1
+    return leftPart < rightPart ? -1 : 1
+  }
+  return 0
+}
+
+function isComparatorSet(value: string): boolean {
+  if (HYPHEN_RANGE.test(value)) return true
+  const normalized = value.replace(/(<=|>=|<|>|=|~|\^) +/gu, '$1')
+  const comparators = normalized.split(/ +/u)
+  return comparators.length > 0 && comparators.every(comparator => COMPARATOR.test(comparator))
+}
+
+function isNpmVersionRange(value: string): boolean {
+  if (!/^[0-9xX*<>=~^|.+\- ]+$/u.test(value)) return false
+  const alternatives = value.split(/ *\|\| */u)
+  return alternatives.length > 0 && alternatives.every(alternative => alternative !== '' && isComparatorSet(alternative))
+}
+
+/** Return whether pnpm may safely replace this profile dependency from an npm version, range, or tag. */
+export function isRegistryPluginSpec(value: unknown): value is string {
+  if (typeof value !== 'string' || value.trim() !== value || value === '' || /[\u0000-\u001f\u007f]/u.test(value)) return false
+  if (/\.(?:tgz|tar(?:\.gz)?)$/iu.test(value)) return false
+  return parseSemver(value) !== undefined || isNpmVersionRange(value) || DIST_TAG.test(value)
+}
+
+/** Resolve the DSH profile named by the current launcher arguments. */
+export function launchedProfileName(argv: readonly string[]): string {
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === '--profile') {
+      const candidate = argv[index + 1]
+      if (candidate !== undefined && /^[\w.-]+$/u.test(candidate)) return candidate
+    }
+    const match = /^--profile=([\w.-]+)$/u.exec(argv[index] ?? '')
+    if (match?.[1] !== undefined) return match[1]
+  }
+  return 'web'
+}
+
+async function profileDependencySpec(profileDirectory: string): Promise<string | undefined> {
+  try {
+    const manifest = JSON.parse(await readFile(join(profileDirectory, 'package.json'), 'utf8')) as {
+      readonly dependencies?: Readonly<Record<string, unknown>>
+    }
+    const value = manifest.dependencies?.[PACKAGE_NAME]
+    return typeof value === 'string' ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function fetchNpmVersion(fetcher: typeof globalThis.fetch): Promise<string | undefined> {
+  const response = await fetcher(NPM_LATEST_URL, {
+    headers: { accept: 'application/json', 'user-agent': 'dsh-mobile-release-check' },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  })
+  if (!response.ok) return undefined
+  const payload = await response.json() as { readonly version?: unknown }
+  return typeof payload.version === 'string' && parseSemver(payload.version) !== undefined
+    ? payload.version
+    : undefined
+}
+
+function githubReleaseVersion(location: string | null, responseUrl: string): string | undefined {
+  let url: URL
+  try { url = new URL(location ?? responseUrl, GITHUB_LATEST_URL) }
+  catch { return undefined }
+  if (url.origin !== 'https://github.com' || url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') return undefined
+  const prefix = '/saya-ch/dsh-mobile/releases/tag/v'
+  if (!url.pathname.startsWith(prefix)) return undefined
+  let version: string
+  try { version = decodeURIComponent(url.pathname.slice(prefix.length)) } catch { return undefined }
+  return parseSemver(version) === undefined ? undefined : version
+}
+
+function androidReleaseDownloadUrl(version: string | undefined): string {
+  if (version === undefined) return GITHUB_RELEASES_URL
+  const tag = `v${version}`
+  return `https://github.com/saya-ch/dsh-mobile/releases/download/${encodeURIComponent(tag)}/dsh-mobile-android-${encodeURIComponent(tag)}.apk`
+}
+
+async function fetchAndroidVersion(fetcher: typeof globalThis.fetch): Promise<string | undefined> {
+  const response = await fetcher(GITHUB_LATEST_URL, {
+    method: 'GET',
+    redirect: 'manual',
+    headers: { accept: 'text/html', 'user-agent': 'dsh-mobile-release-check' },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  })
+  return githubReleaseVersion(response.headers.get('location'), response.url)
+}
+
+async function readProfileInstalledVersion(profileDirectory: string): Promise<string | undefined> {
+  try {
+    const manifestPath = createRequire(join(profileDirectory, 'package.json')).resolve(`${PACKAGE_NAME}/package.json`)
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { readonly version?: unknown }
+    return typeof manifest.version === 'string' ? manifest.version : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function childCompletion(child: ChildProcess): Promise<UpdateProcessExit> {
+  return new Promise<UpdateProcessExit>((resolveCompletion, rejectCompletion) => {
+    child.once('error', rejectCompletion)
+    child.once('close', (code, signal) => { resolveCompletion({ code, signal }) })
+  })
+}
+
+function createDeadline(timeoutMs: number): UpdateDeadline {
+  let timer: NodeJS.Timeout | undefined
+  const promise = new Promise<void>(resolveTimeout => {
+    timer = setTimeout(resolveTimeout, timeoutMs)
+    timer.unref()
+  })
+  return {
+    promise,
+    cancel: () => {
+      if (timer !== undefined) clearTimeout(timer)
+      timer = undefined
+    },
+  }
+}
+
+async function taskkillProcessTree(pid: number): Promise<void> {
+  const killer = spawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+    shell: false,
+    windowsHide: true,
+    stdio: 'ignore',
+  })
+  const result = await childCompletion(killer)
+  if (result.code !== 0) throw new Error('plugin_update_tree_termination_failed')
+}
+
+async function completionWithin(completion: Promise<UpdateProcessExit>, timeoutMs: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined
+  try {
+    return await Promise.race([
+      completion.then(() => true, () => true),
+      new Promise<false>(resolveTimeout => {
+        timer = setTimeout(() => { resolveTimeout(false) }, timeoutMs)
+        timer.unref()
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+function processMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ESRCH'
+}
+
+async function terminateProcessTree(child: ChildProcess, completion: Promise<UpdateProcessExit>, platform: NodeJS.Platform): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  const pid = child.pid
+  if (pid === undefined) {
+    child.kill('SIGKILL')
+    if (!await completionWithin(completion, UPDATE_TERMINATION_GRACE_MS)) {
+      throw new Error('plugin_update_tree_termination_timeout')
+    }
+    return
+  }
+  if (platform === 'win32') {
+    try { await taskkillProcessTree(pid) } catch (error) {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      if (!await completionWithin(completion, UPDATE_TERMINATION_GRACE_MS)) {
+        throw new AggregateError([error, new Error('plugin_update_tree_termination_timeout')], 'plugin update tree termination failed')
+      }
+      throw error
+    }
+    if (!await completionWithin(completion, UPDATE_TERMINATION_GRACE_MS)) {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      if (!await completionWithin(completion, UPDATE_TERMINATION_GRACE_MS)) {
+        throw new Error('plugin_update_tree_termination_timeout')
+      }
+    }
+    return
+  }
+  try { process.kill(-pid, 'SIGTERM') } catch (error) {
+    if (!processMissing(error)) throw error
+    if (!await completionWithin(completion, UPDATE_TERMINATION_GRACE_MS)) {
+      throw new Error('plugin_update_tree_termination_timeout')
+    }
+    return
+  }
+  if (await completionWithin(completion, UPDATE_TERMINATION_GRACE_MS)) return
+  try { process.kill(-pid, 'SIGKILL') } catch (error) {
+    if (!processMissing(error)) throw error
+  }
+  if (!await completionWithin(completion, UPDATE_TERMINATION_GRACE_MS)) {
+    throw new Error('plugin_update_tree_termination_timeout')
+  }
+}
+
+function startUpdateProcess(request: UpdateProcessRequest): ManagedUpdateProcess {
+  const child = spawn(request.command, [...request.args], {
+    cwd: request.cwd,
+    detached: request.detached,
+    shell: request.shell,
+    windowsHide: true,
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  const completion = childCompletion(child)
+  return {
+    completion,
+    ...(child.stderr === null ? {} : { stderr: child.stderr }),
+    terminateTree: async () => terminateProcessTree(child, completion, request.platform),
+  }
+}
+
+function updateFailure(cause?: unknown): Error {
+  return cause === undefined ? new Error('plugin_update_failed') : new Error('plugin_update_failed', { cause })
+}
+
+async function runPnpmUpdate(profileDirectory: string, version: string, runtime: PnpmUpdateRuntime = {}): Promise<void> {
+  if (parseSemver(version) === undefined) throw new Error('plugin_update_unavailable')
+  const platform = runtime.platform ?? process.platform
+  const packageSpec = `${PACKAGE_NAME}@${version}`
+  const managed = (runtime.start ?? startUpdateProcess)({
+    command: platform === 'win32'
+      ? (runtime.windowsCommandInterpreter ?? process.env.ComSpec ?? 'cmd.exe')
+      : 'pnpm',
+    args: platform === 'win32'
+      ? ['/d', '/s', '/c', 'pnpm.cmd', 'add', packageSpec]
+      : ['add', packageSpec],
+    cwd: profileDirectory,
+    detached: platform !== 'win32',
+    platform,
+    shell: false,
+  })
+  let diagnostics = ''
+  managed.stderr?.on('data', chunk => {
+    if (diagnostics.length < 4096) diagnostics += Buffer.from(chunk).toString('utf8').slice(0, 4096 - diagnostics.length)
+  })
+  const completion = managed.completion.then(
+    result => ({ kind: 'exit' as const, result }),
+    error => ({ kind: 'error' as const, error }),
+  )
+  const deadline = (runtime.deadline ?? createDeadline)(runtime.timeoutMs ?? UPDATE_TIMEOUT_MS)
+  const first = await Promise.race([
+    completion,
+    deadline.promise.then(() => ({ kind: 'timeout' as const })),
+  ])
+  deadline.cancel()
+  if (first.kind === 'error') throw updateFailure(first.error)
+  if (first.kind === 'exit') {
+    if (first.result.code === 0) return
+    const detail = diagnostics.trim() || `pnpm exited with ${first.result.signal ?? String(first.result.code)}`
+    throw updateFailure(new Error(detail))
+  }
+  let terminationError: unknown
+  try { await managed.terminateTree() } catch (error) { terminationError = error }
+  if (terminationError !== undefined) throw updateFailure(terminationError)
+  const stopped = await completion
+  if (stopped.kind === 'error') throw updateFailure(stopped.error)
+  throw updateFailure(new Error('plugin update timed out'))
+}
+
+/** Cached npm/GitHub release lookup and guarded profile-local package update. */
+export class PluginReleaseManager {
+  private readonly profileDirectory: string
+  private readonly installedVersion: string
+  private readonly fetcher: typeof globalThis.fetch
+  private readonly runner: (profileDirectory: string, version: string) => Promise<void>
+  private readonly installedVersionReader: (profileDirectory: string) => Promise<string | undefined>
+  private readonly now: () => number
+  private cache: { readonly expiresAt: number; readonly status: PluginReleaseStatus } | undefined
+  private activeUpdate: Promise<PluginUpdateResult> | undefined
+
+  constructor(options: PluginReleaseManagerOptions) {
+    this.profileDirectory = options.profileDirectory
+    this.installedVersion = options.installedVersion ?? DSH_MOBILE_VERSION
+    this.fetcher = options.fetch ?? globalThis.fetch
+    this.runner = options.runUpdate ?? ((profileDirectory, version) => runPnpmUpdate(profileDirectory, version, options.updateProcess))
+    this.installedVersionReader = options.readInstalledVersion ?? readProfileInstalledVersion
+    this.now = options.now ?? Date.now
+  }
+
+  /** Read cached release metadata and suppress external lookup failures. */
+  async status(force = false): Promise<PluginReleaseStatus> {
+    if (!force && this.cache !== undefined && this.cache.expiresAt > this.now()) return this.cache.status
+    const dependencySpec = await profileDependencySpec(this.profileDirectory)
+    const updateSupported = isRegistryPluginSpec(dependencySpec)
+    const [npmResult, androidResult] = await Promise.allSettled([
+      fetchNpmVersion(this.fetcher),
+      fetchAndroidVersion(this.fetcher),
+    ])
+    const latestVersion = npmResult.status === 'fulfilled' ? npmResult.value : undefined
+    const androidVersion = androidResult.status === 'fulfilled' ? androidResult.value : undefined
+    const comparison = latestVersion === undefined
+      ? undefined
+      : comparePluginVersions(latestVersion, this.installedVersion)
+    const status: PluginReleaseStatus = Object.freeze({
+      installedVersion: this.installedVersion,
+      ...(latestVersion === undefined ? {} : { latestVersion }),
+      updateAvailable: updateSupported && comparison === 1,
+      updateSupported,
+      ...(androidVersion === undefined ? {} : { androidVersion }),
+      androidDownloadUrl: androidReleaseDownloadUrl(androidVersion),
+    })
+    this.cache = { expiresAt: this.now() + STATUS_CACHE_MS, status }
+    return status
+  }
+
+  /** Install the latest npm release into the active profile, then require a DSH restart. */
+  async update(): Promise<PluginUpdateResult> {
+    if (this.activeUpdate !== undefined) return this.activeUpdate
+    this.activeUpdate = this.updateOnce()
+    try { return await this.activeUpdate }
+    finally { this.activeUpdate = undefined }
+  }
+
+  private async updateOnce(): Promise<PluginUpdateResult> {
+    const status = await this.status(true)
+    if (!status.updateSupported) throw new Error('plugin_update_unsupported')
+    if (!status.updateAvailable || status.latestVersion === undefined) throw new Error('plugin_update_unavailable')
+    await this.runner(this.profileDirectory, status.latestVersion)
+    const installed = await this.installedVersionReader(this.profileDirectory)
+    if (installed !== status.latestVersion) throw new Error('plugin_update_failed')
+    this.cache = undefined
+    return Object.freeze({ installedVersion: installed, restartRequired: true })
+  }
+}

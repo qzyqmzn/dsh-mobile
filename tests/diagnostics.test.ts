@@ -22,7 +22,7 @@ describe('connection diagnostics', () => {
   it('allows known remote relays longer than direct endpoints', () => {
     expect(remoteDiagnosticTimeoutMs('https://private-name.r8.cpolar.cn')).toBe(10_000)
     expect(remoteDiagnosticTimeoutMs('https://example.tail1234.ts.net')).toBe(10_000)
-    expect(remoteDiagnosticTimeoutMs('https://example.com')).toBe(5_000)
+    expect(remoteDiagnosticTimeoutMs('https://example.com')).toBe(10_000)
   })
 
   it('summarizes healthy LAN and remote paths without copying exact addresses', async () => {

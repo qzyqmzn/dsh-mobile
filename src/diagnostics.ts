@@ -1,6 +1,7 @@
 import { execFile as execFileCallback } from 'node:child_process'
 import { lookup } from 'node:dns/promises'
 import { promisify } from 'node:util'
+import type { RemoteProvider } from './remote.js'
 import { DSH_MOBILE_VERSION, MINIMUM_ANDROID_APP_VERSION } from './version.js'
 
 const execFile = promisify(execFileCallback)
@@ -16,7 +17,7 @@ export type DiagnosticReason =
   | 'phone-network-unknown'
 
 export interface DiagnosticFacts {
-  readonly provider?: 'tailscale' | 'cpolar'
+  readonly provider?: RemoteProvider
   readonly latencyMs?: number
   readonly interfaceName?: string
   readonly endpointSuffix?: string
@@ -46,7 +47,7 @@ export interface DiagnosticSnapshot {
     readonly port?: number
   }
   readonly remote: {
-    readonly provider: 'tailscale' | 'cpolar'
+    readonly provider: RemoteProvider
     readonly running: boolean
     readonly state: string
     readonly origin?: string
@@ -103,6 +104,18 @@ const REMOTE_ERROR_GUIDANCE: Readonly<Record<string, string>> = Object.freeze({
   cpolar_start_timeout: '检查网络后点击“重新连接”。',
   cpolar_stopped: '点击“重新连接”。',
   cpolar_exited: '点击“重新连接”；仍失败时复制诊断报告。',
+  frp_component_missing: '先安装 FRP 官方组件。',
+  frp_component_invalid: '彻底清理 FRP 组件后重新安装。',
+  frp_config_missing: '先保存自建 FRP 连接配置。',
+  frp_config_verify_failed: '检查服务器地址、端口、Token 和公开域名。',
+  frp_vhost_publicly_reachable: '将 frps 的 HTTP vhost 监听限制到 127.0.0.1。',
+  frp_vhost_probe_failed: '确认 VPS 地址可解析后重新连接。',
+  frp_launch_failed: '重新安装 FRP 官方组件后重试。',
+  frp_start_timeout: '确认 frps、Caddy 和域名解析正常后重新连接。',
+  frp_discovery_mismatch: '公开域名连接到了另一台电脑，请核对 Caddy 与 frps 配置。',
+  frp_discovery_invalid: '公开域名返回了非 DSH Mobile 响应。',
+  frp_stopped: '点击“重新连接”。',
+  frp_exited: '检查 VPS 配置后重新连接；仍失败时复制诊断报告。',
   gateway_start_failed: '确认 DSH 正在运行后重新连接。',
 })
 
@@ -178,7 +191,7 @@ function defaultFirewallProbe(platform: NodeJS.Platform = process.platform): (po
 export function remoteDiagnosticTimeoutMs(origin: string): number {
   const hostname = new URL(origin).hostname.toLowerCase()
   if (hostname.endsWith('.ts.net') || hostname.includes('.cpolar.')) return 10_000
-  return 5_000
+  return 10_000
 }
 
 async function defaultRemoteProbe(origin: string | undefined): Promise<RemoteObservation> {

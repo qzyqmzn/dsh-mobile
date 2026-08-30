@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Config, parseGatewayConfig } from '../src/config.js'
 import { parseCidr, RequestTrustPolicy } from '../src/network.js'
-import { apply, inject, remoteGatewayConfig } from '../src/plugin.js'
+import { apply, inject, remoteGatewayConfig, settleCleanupSteps } from '../src/plugin.js'
 import { DSH_MOBILE_VERSION, MINIMUM_ANDROID_APP_VERSION } from '../src/version.js'
 
 const contexts: Context[] = []
@@ -154,6 +154,23 @@ describe('stock DSH lifecycle', () => {
     expect(inject).toEqual(['webServer', 'commands', 'connection'])
   })
 
+  it('continues ordered teardown after failures and aggregates them', async () => {
+    const completed: string[] = []
+    let failure: unknown
+    try {
+      await settleCleanupSteps([
+        () => { completed.push('route') },
+        async () => { completed.push('remote'); throw new Error('remote close failed') },
+        async () => { completed.push('lan') },
+        async () => { completed.push('extensions'); throw new Error('extension close failed') },
+        () => { completed.push('builtin') },
+      ])
+    } catch (error) { failure = error }
+    expect(completed).toEqual(['route', 'remote', 'lan', 'extensions', 'builtin'])
+    expect(failure).toBeInstanceOf(AggregateError)
+    expect((failure as AggregateError).errors).toHaveLength(2)
+  })
+
   it('keeps a loopback control route available while the LAN listener is stopped', async () => {
     const mounted = await mount()
     expect(mounted.route).toMatchObject({ kind: 'prefix', path: '/api/mobile-access' })
@@ -173,6 +190,13 @@ describe('stock DSH lifecycle', () => {
           running: false,
           state: 'off',
           component: { installed: false, configured: false },
+        },
+        frp: {
+          bundled: false,
+          running: false,
+          state: 'off',
+          component: { supported: true, installed: false, version: '0.70.1' },
+          configuration: { configured: false, vhostHttpPort: 7080 },
         },
       },
     })
@@ -209,6 +233,44 @@ describe('stock DSH lifecycle', () => {
     expect(JSON.parse(selected.body)).toMatchObject({ provider: 'cpolar', running: false, state: 'off' })
     const lan = await invoke(mounted.route, 'GET', '/api/mobile-access/lan/control')
     expect(JSON.parse(lan.body)).toEqual({ running: false })
+  })
+
+  it('stores restricted FRP settings without returning the token', async () => {
+    const mounted = await mount()
+    const selected = await invoke(
+      mounted.route,
+      'POST',
+      '/api/mobile-access/remote/provider',
+      JSON.stringify({ provider: 'frp' }),
+    )
+    expect(selected.status).toBe(200)
+    const token = '0123456789abcdef0123456789abcdef'
+    const configured = await invoke(
+      mounted.route,
+      'POST',
+      '/api/mobile-access/remote/frp/configure',
+      JSON.stringify({
+        serverAddress: 'frp.example.com',
+        serverPort: 7000,
+        token,
+        publicOrigin: 'https://dsh.example.com',
+      }),
+    )
+    expect(configured.status).toBe(200)
+    expect(configured.body).not.toContain(token)
+    expect(JSON.parse(configured.body)).toMatchObject({
+      provider: 'frp',
+      providers: {
+        frp: {
+          configuration: {
+            configured: true,
+            serverAddress: 'frp.example.com',
+            serverPort: 7000,
+            publicOrigin: 'https://dsh.example.com',
+          },
+        },
+      },
+    })
   })
 
   it('registers a /mobile command that steers the agent with the customization guide', async () => {

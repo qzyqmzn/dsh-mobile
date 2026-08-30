@@ -10,9 +10,14 @@ local/
 *.pfx
 *.key
 *.pem
+*.jks
+*.keystore
+keystore.properties
 apps/mobile/android/.gradle/
+apps/mobile/android/.kotlin/
 apps/mobile/android/local.properties
 apps/mobile/android/**/build/
+.tmp-signature-check/
 # The iOS experiment is intentionally outside the Android-only alpha.
 apps/mobile/ios/
 apps/mobile/store/ios/

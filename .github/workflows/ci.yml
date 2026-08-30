@@ -39,15 +39,52 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+      - name: Install pnpm for Windows updater smoke test
+        if: runner.os == 'Windows'
+        run: npm install --global pnpm@10.10.0
       - run: npm ci
       - run: npm run verify
+
+  funnel-host:
+    name: Funnel host
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.6
+          cache-dependency-path: native/funnel-host/go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+      - run: go test ./...
+        working-directory: native/funnel-host
+      - run: go vet ./...
+        working-directory: native/funnel-host
+      - run: npm run build:funnel-host
+      - name: Record Funnel build metadata
+        run: |
+          sha256sum bin/dsh-mobile-funnel-win32-x64.exe
+          go version -m bin/dsh-mobile-funnel-win32-x64.exe | tee dsh-mobile-funnel-build-metadata.txt
+      - run: npm run check:funnel-licenses:full
+      - run: git diff --exit-code -- bin/dsh-mobile-funnel-win32-x64.exe FUNNEL_THIRD_PARTY_LICENSES.txt
+      - name: Preserve failed Funnel rebuild for comparison
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: funnel-rebuild-diagnostics
+          path: |
+            bin/dsh-mobile-funnel-win32-x64.exe
+            FUNNEL_THIRD_PARTY_LICENSES.txt
+            dsh-mobile-funnel-build-metadata.txt
+          if-no-files-found: error
 
   android:
     name: Android
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 17

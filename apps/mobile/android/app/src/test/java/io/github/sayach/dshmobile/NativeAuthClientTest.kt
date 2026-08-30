@@ -9,6 +9,10 @@ import org.json.JSONObject
 import java.io.ByteArrayInputStream
 
 class NativeAuthClientTest {
+    private val origin = GatewayOrigin.parse("https://example.r8.cpolar.cn")!!
+    private val instanceId = "a".repeat(64)
+    private val now = 1_700_000_000_000L
+
     @Test
     fun readsTheCompleteResponseBeforeTheLimit() {
         val source = "discovery".toByteArray()
@@ -28,6 +32,71 @@ class NativeAuthClientTest {
         assertThrows(IllegalArgumentException::class.java) {
             readAtMost(ByteArrayInputStream(byteArrayOf()), -1)
         }
+    }
+
+    @Test
+    fun parsesStrictPairAndRenewResponses() {
+        val paired = parseSession(validPairResponse(), requireDeviceCredential = true)
+        assertEquals(origin, paired.origin)
+        assertEquals(instanceId, paired.instanceId)
+        assertEquals("D".repeat(43), paired.deviceToken)
+        assertEquals(now + 60_000, paired.deviceExpiresAt)
+
+        val renewed = parseSession(validRenewResponse(), requireDeviceCredential = false)
+        assertEquals(origin, renewed.origin)
+        assertNull(renewed.deviceToken)
+        assertNull(renewed.deviceExpiresAt)
+    }
+
+    @Test
+    fun rejectsMalformedNativeSessions() {
+        val malformed = listOf(
+            JSONObject(validPairResponse().toString()).apply { remove("csrfToken") },
+            JSONObject(validPairResponse().toString()).put("csrfToken", 7),
+            JSONObject(validPairResponse().toString()).put("sessionToken", "short"),
+            JSONObject(validPairResponse().toString()).put("instanceId", "b".repeat(64)),
+            JSONObject(validPairResponse().toString()).put("sessionExpiresAt", now),
+            JSONObject(validPairResponse().toString()).put("deviceExpiresAt", now + 10_000)
+                .put("sessionExpiresAt", now + 20_000),
+            JSONObject(validPairResponse().toString()).put("unexpected", true),
+        )
+
+        malformed.forEach { response ->
+            val failure = assertThrows(NativeAuthFailure::class.java) {
+                parseSession(response, requireDeviceCredential = true)
+            }
+            assertEquals(NativeAuthFailureKind.INVALID_RESPONSE, failure.kind)
+        }
+    }
+
+    @Test
+    fun rejectsMalformedNativeSessionJson() {
+        val failure = assertThrows(NativeAuthFailure::class.java) {
+            parseNativeSessionResponse(
+                ByteArrayInputStream("not json".toByteArray()),
+                origin,
+                instanceId,
+                requireDeviceCredential = true,
+                now = now,
+            )
+        }
+
+        assertEquals(NativeAuthFailureKind.INVALID_RESPONSE, failure.kind)
+    }
+
+    @Test
+    fun rejectsOversizedNativeSessionResponses() {
+        val failure = assertThrows(NativeAuthFailure::class.java) {
+            parseNativeSessionResponse(
+                ByteArrayInputStream(ByteArray(MAX_NATIVE_AUTH_RESPONSE_BYTES + 1) { 'x'.code.toByte() }),
+                origin,
+                instanceId,
+                requireDeviceCredential = true,
+                now = now,
+            )
+        }
+
+        assertEquals(NativeAuthFailureKind.INVALID_RESPONSE, failure.kind)
     }
 
     @Test
@@ -61,5 +130,25 @@ class NativeAuthClientTest {
         assertEquals(10_000, remote.authConnectMs)
         assertEquals(30_000, remote.authReadMs)
     }
+
+    private fun parseSession(response: JSONObject, requireDeviceCredential: Boolean): NativeSession =
+        parseNativeSessionResponse(
+            ByteArrayInputStream(response.toString().toByteArray()),
+            origin,
+            instanceId,
+            requireDeviceCredential,
+            now,
+        )
+
+    private fun validPairResponse(): JSONObject = validRenewResponse()
+        .put("deviceToken", "D".repeat(43))
+        .put("deviceExpiresAt", now + 60_000)
+
+    private fun validRenewResponse(): JSONObject = JSONObject()
+        .put("instanceId", instanceId)
+        .put("deviceId", "d".repeat(32))
+        .put("sessionToken", "S".repeat(43))
+        .put("csrfToken", "C".repeat(43))
+        .put("sessionExpiresAt", now + 30_000)
 
 }

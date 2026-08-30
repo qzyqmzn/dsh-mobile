@@ -34,7 +34,18 @@ import { JsonDeviceStore } from './storage.js'
 import { FunnelController, funnelExecutable } from './funnel.js'
 import { CpolarController } from './cpolar.js'
 import { CpolarComponentManager, type CpolarComponentStatus } from './cpolar-component.js'
-import { configuredRemoteProvider, JsonRemoteProviderStore, type RemoteProvider } from './remote.js'
+import { FrpComponentManager, type FrpComponentStatus } from './frp-component.js'
+import { FrpConfigStore, type FrpConfigurationStatus } from './frp-config.js'
+import { FrpController } from './frp.js'
+import { launchedProfileName, PluginReleaseManager } from './release-update.js'
+import {
+  configuredRemoteProvider,
+  JsonRemoteProviderStore,
+  RemoteProviderCoordinator,
+  type RemoteProvider,
+  type RemoteProviderController,
+  type RemoteProviderStatus,
+} from './remote.js'
 import { parseAuthority, parseCidr } from './network.js'
 import {
   materializeManagedSetup,
@@ -48,6 +59,16 @@ export const name = 'dsh-mobile'
 
 /** The stock WebServer serves the control card; Connection authenticates the loopback DSH origin. */
 export const inject = ['webServer', 'commands', 'connection']
+
+/** Run cleanup steps in ownership order and report every failure after all steps settle. */
+export async function settleCleanupSteps(steps: readonly (() => void | Promise<void>)[]): Promise<void> {
+  const errors: unknown[] = []
+  for (const step of steps) {
+    try { await step() } catch (error) { errors.push(error) }
+  }
+  if (errors.length === 1 && errors[0] instanceof Error) throw errors[0]
+  if (errors.length > 0) throw new AggregateError(errors, 'DSH Mobile cleanup failed')
+}
 
 interface BrowserAuthenticatedConnection {
   authenticatedUrl?: (baseUrl: string) => string
@@ -78,6 +99,22 @@ function mapAdminError(error: unknown): HttpError {
     return new HttpError(400, 'cpolar_authtoken_invalid')
   }
   if (error instanceof Error && error.message.startsWith('cpolar_')) {
+    return new HttpError(409, error.message)
+  }
+  if (error instanceof Error && [
+    'frp_server_address_invalid',
+    'frp_server_port_invalid',
+    'frp_token_invalid',
+    'frp_public_origin_invalid',
+    'frp_settings_invalid',
+  ].includes(error.message)) return new HttpError(400, error.message)
+  if (error instanceof Error && error.message.startsWith('frp_')) {
+    return new HttpError(409, error.message)
+  }
+  if (error instanceof Error && error.message === 'plugin_update_failed') {
+    return new HttpError(500, error.message)
+  }
+  if (error instanceof Error && error.message.startsWith('plugin_update_')) {
     return new HttpError(409, error.message)
   }
   return new HttpError(500, 'internal_error')
@@ -185,21 +222,14 @@ export function remoteGatewayConfig(
   })
 }
 
-interface RemoteStatus {
-  readonly enabled: boolean
-  readonly state: string
-  readonly origin?: string
-  readonly loginUrl?: string
-  readonly setupUrl?: string
-  readonly errorCode?: string
-}
-
 function remoteControlPayload(
   provider: RemoteProvider,
-  status: RemoteStatus,
+  status: RemoteProviderStatus,
   gateway: MobileAccessGateway | undefined,
-  providerStatuses: Readonly<Record<RemoteProvider, RemoteStatus>>,
+  providerStatuses: Readonly<Record<RemoteProvider, RemoteProviderStatus>>,
   cpolarComponent: CpolarComponentStatus,
+  frpComponent: FrpComponentStatus,
+  frpConfiguration: FrpConfigurationStatus,
 ): Record<string, unknown> {
   return {
     provider,
@@ -218,6 +248,13 @@ function remoteControlPayload(
         state: providerStatuses.cpolar.state,
         component: cpolarComponent,
       },
+      frp: {
+        bundled: false,
+        running: providerStatuses.frp.enabled,
+        state: providerStatuses.frp.state,
+        component: frpComponent,
+        configuration: frpConfiguration,
+      },
     },
   }
 }
@@ -233,13 +270,24 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   const instanceId = await stableInstanceId(loaded, template)
   const stateDirectory = dirname(template.stateFile)
   const remoteDirectory = join(stateDirectory, 'remote')
+  const configuredDshHome = process.env.DSH_HOME?.trim()
+  const dshHome = configuredDshHome === undefined || configuredDshHome === ''
+    ? dirname(stateDirectory)
+    : resolve(configuredDshHome)
+  const releaseManager = new PluginReleaseManager({
+    profileDirectory: join(dshHome, 'profiles', launchedProfileName(process.argv.slice(2))),
+  })
   const remoteProviderStore = new JsonRemoteProviderStore(
     join(remoteDirectory, 'provider.json'),
     configuredRemoteProvider(process.env),
   )
-  let remoteProvider = (await remoteProviderStore.load()).provider
+  const initialRemoteProvider = (await remoteProviderStore.load()).provider
   const cpolarComponent = new CpolarComponentManager({ stateDirectory })
   await cpolarComponent.initialize()
+  const frpComponent = new FrpComponentManager({ stateDirectory })
+  await frpComponent.initialize()
+  const frpConfig = new FrpConfigStore(join(remoteDirectory, 'frp', 'config'))
+  await frpConfig.initialize()
   const unregisterBuiltin = mobileAccess.registerExtension({
     schemaVersion: 1,
     id: 'computer-images',
@@ -305,7 +353,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   )
   const remoteDeviceFile = join(remoteDirectory, 'devices.json')
   const legacyCpolarDeviceFile = join(remoteDirectory, 'cpolar', 'devices.json')
-  if (remoteProvider === 'cpolar') {
+  if (initialRemoteProvider === 'cpolar') {
     try {
       await lstat(remoteDeviceFile)
     } catch (error) {
@@ -334,7 +382,8 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   }
   const tailscaleStore = new JsonMobileAccessControlStore(join(remoteDirectory, 'control.json'), false)
   const cpolarStore = new JsonMobileAccessControlStore(join(remoteDirectory, 'cpolar', 'control.json'), false)
-  const remoteControllers = {
+  const frpStore = new JsonMobileAccessControlStore(join(remoteDirectory, 'frp', 'control.json'), false)
+  const remoteControllers: Record<RemoteProvider, RemoteProviderController> = {
     tailscale: new FunnelController({
       store: tailscaleStore,
       executable: funnelExecutable(import.meta.url),
@@ -349,32 +398,29 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
       region: 'cn',
       createGateway: createRemoteGateway,
     }),
+    frp: new FrpController({
+      store: frpStore,
+      executable: frpComponent.executable,
+      config: frpConfig,
+      instanceId,
+      createGateway: createRemoteGateway,
+    }),
   }
-  const remoteController = () => remoteControllers[remoteProvider]
+  const remoteProviders = new RemoteProviderCoordinator(initialRemoteProvider, remoteControllers, remoteProviderStore)
+  const remoteController = () => remoteProviders.controller()
   const remotePayload = (): Record<string, unknown> => remoteControlPayload(
-    remoteProvider,
+    remoteProviders.selected,
     remoteController().status(),
     remoteController().gateway(),
     {
       tailscale: remoteControllers.tailscale.status(),
       cpolar: remoteControllers.cpolar.status(),
+      frp: remoteControllers.frp.status(),
     },
     cpolarComponent.status(),
+    frpComponent.status(),
+    frpConfig.status(),
   )
-  const selectRemoteProvider = async (provider: RemoteProvider): Promise<void> => {
-    if (provider === remoteProvider) return
-    const previousProvider = remoteProvider
-    const previous = remoteControllers[previousProvider]
-    const restore = previous.status().enabled
-    if (restore) await previous.setEnabled(false)
-    try {
-      await remoteProviderStore.save({ version: 1, provider })
-      remoteProvider = provider
-    } catch (error) {
-      if (restore) await previous.setEnabled(true)
-      throw error
-    }
-  }
   const lanPayload = (): Record<string, unknown> => ({
     running: lanController.isRunning(),
     origin: lanGateway?.address().origin,
@@ -398,7 +444,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
         ...(networkError === undefined ? {} : { networkError }),
       },
       remote: {
-        provider: remoteProvider,
+        provider: remoteProviders.selected,
         running: remote.enabled,
         state: remote.state,
         ...(remote.origin === undefined ? {} : { origin: remote.origin }),
@@ -425,6 +471,15 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
           sendJson(response, 200, await diagnosticsPayload(), false)
           return
         }
+        if (request.method === 'GET' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/release`) {
+          sendJson(response, 200, await releaseManager.status(), false)
+          return
+        }
+        if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/release/update`) {
+          await readJsonObject(request, 4096)
+          sendJson(response, 200, await releaseManager.update(), false)
+          return
+        }
         if (request.method === 'POST' && lanControl) {
           const body = await readJsonObject(request, 4096)
           if (typeof body.running !== 'boolean') throw new HttpError(400, 'bad_request')
@@ -438,50 +493,83 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
         }
         if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/provider`) {
           const body = await readJsonObject(request, 4096)
-          if (body.provider !== 'tailscale' && body.provider !== 'cpolar') throw new HttpError(400, 'bad_request')
-          await selectRemoteProvider(body.provider)
+          if (body.provider !== 'tailscale' && body.provider !== 'cpolar' && body.provider !== 'frp') {
+            throw new HttpError(400, 'bad_request')
+          }
+          await remoteProviders.select(body.provider)
           sendJson(response, 200, remotePayload(), false)
           return
         }
         if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/cpolar/component/install`) {
           const body = await readJsonObject(request, 4096)
           if (body.confirm !== true) throw new HttpError(400, 'bad_request')
-          await cpolarComponent.install()
+          await remoteProviders.mutate(async () => cpolarComponent.install())
           sendJson(response, 200, remotePayload(), false)
           return
         }
         if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/cpolar/configure`) {
           const body = await readJsonObject(request, 4096)
-          await cpolarComponent.configure(body.authtoken)
+          await remoteProviders.mutate(async () => cpolarComponent.configure(body.authtoken))
           sendJson(response, 200, remotePayload(), false)
           return
         }
         if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/cpolar/component/purge`) {
           const body = await readJsonObject(request, 4096)
           if (body.confirm !== true) throw new HttpError(400, 'bad_request')
-          await remoteControllers.cpolar.setEnabled(false)
-          await cpolarComponent.purge()
+          await remoteProviders.mutate(async () => {
+            await remoteControllers.cpolar.setEnabled(false)
+            await cpolarComponent.purge()
+          })
+          sendJson(response, 200, remotePayload(), false)
+          return
+        }
+        if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/frp/component/install`) {
+          const body = await readJsonObject(request, 4096)
+          if (body.confirm !== true) throw new HttpError(400, 'bad_request')
+          await remoteProviders.mutate(async () => frpComponent.install())
+          sendJson(response, 200, remotePayload(), false)
+          return
+        }
+        if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/frp/configure`) {
+          const body = await readJsonObject(request, 4096)
+          await remoteProviders.mutate(async () => {
+            await frpConfig.configure(body)
+            if (remoteControllers.frp.status().enabled) await remoteControllers.frp.reconnect()
+          })
+          sendJson(response, 200, remotePayload(), false)
+          return
+        }
+        if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/frp/component/purge`) {
+          const body = await readJsonObject(request, 4096)
+          if (body.confirm !== true) throw new HttpError(400, 'bad_request')
+          await remoteProviders.mutate(async () => {
+            await remoteControllers.frp.setEnabled(false)
+            await Promise.all([frpComponent.purge(), frpConfig.purge()])
+          })
           sendJson(response, 200, remotePayload(), false)
           return
         }
         if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/control`) {
           const body = await readJsonObject(request, 4096)
-          if (typeof body.running !== 'boolean') throw new HttpError(400, 'bad_request')
-          await remoteController().setEnabled(body.running)
+          const running = body.running
+          if (typeof running !== 'boolean') throw new HttpError(400, 'bad_request')
+          await remoteProviders.mutate(async controller => controller.setEnabled(running))
           sendJson(response, 200, remotePayload(), false)
           return
         }
         if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/reconnect`) {
           await readJsonObject(request, 4096)
-          await remoteController().reconnect()
+          await remoteProviders.mutate(async controller => controller.reconnect())
           sendJson(response, 200, remotePayload(), false)
           return
         }
         if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/reset`) {
           const body = await readJsonObject(request, 4096)
           if (body.confirm !== true) throw new HttpError(400, 'bad_request')
-          await remoteController().reset()
-          await rm(remoteDeviceFile, { force: true })
+          await remoteProviders.mutate(async controller => {
+            await controller.reset()
+            await rm(remoteDeviceFile, { force: true })
+          })
           sendJson(response, 200, remotePayload(), false)
           return
         }
@@ -535,26 +623,47 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     try {
       await mobileAccess.startLocal(template.extensionsDir, ctx)
       await lanController.initialize()
-      if (remoteProvider === 'tailscale') await cpolarStore.save({ version: 1, enabled: false })
-      else await tailscaleStore.save({ version: 1, enabled: false })
-      await remoteControllers.tailscale.initialize()
-      await remoteControllers.cpolar.initialize()
+      const stores: Record<RemoteProvider, JsonMobileAccessControlStore> = {
+        tailscale: tailscaleStore,
+        cpolar: cpolarStore,
+        frp: frpStore,
+      }
+      await Promise.all((Object.keys(stores) as RemoteProvider[])
+        .filter(provider => provider !== remoteProviders.selected)
+        .map(provider => stores[provider].save({ version: 1, enabled: false })))
+      for (const provider of ['tailscale', 'cpolar', 'frp'] as const) await remoteControllers[provider].initialize()
     } catch (error) {
-      unregister()
-      disposeMobileCommand()
-      await Promise.all([remoteControllers.tailscale.close(), remoteControllers.cpolar.close()])
-      await lanController.close()
-      await mobileAccess.stopLocal()
-      unregisterBuiltin()
+      try {
+        await settleCleanupSteps([
+          unregister,
+          disposeMobileCommand,
+          async () => {
+            const results = await Promise.allSettled(Object.values(remoteControllers).map(controller => controller.close()))
+            const failures = results.filter(result => result.status === 'rejected').map(result => result.reason as unknown)
+            if (failures.length > 0) throw new AggregateError(failures, 'remote provider cleanup failed')
+          },
+          () => lanController.close(),
+          () => mobileAccess.stopLocal(),
+          unregisterBuiltin,
+        ])
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'DSH Mobile initialization and cleanup failed')
+      }
       throw error
     }
     return async () => {
-      unregister()
-      disposeMobileCommand()
-      await Promise.all([remoteControllers.tailscale.close(), remoteControllers.cpolar.close()])
-      await lanController.close()
-      await mobileAccess.stopLocal()
-      unregisterBuiltin()
+      await settleCleanupSteps([
+        unregister,
+        disposeMobileCommand,
+        async () => {
+          const results = await Promise.allSettled(Object.values(remoteControllers).map(controller => controller.close()))
+          const failures = results.filter(result => result.status === 'rejected').map(result => result.reason as unknown)
+          if (failures.length > 0) throw new AggregateError(failures, 'remote provider cleanup failed')
+        },
+        () => lanController.close(),
+        () => mobileAccess.stopLocal(),
+        unregisterBuiltin,
+      ])
     }
-  }, 'dsh-mobile: independent LAN and selectable remote access with /mobile command')
+  }, 'dsh-mobile: independent LAN and selectable remote providers with /mobile command')
 }

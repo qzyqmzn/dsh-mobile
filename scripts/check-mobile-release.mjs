@@ -95,7 +95,7 @@ async function checkBrandAndStoreIcon() {
 }
 
 async function checkAndroid() {
-  const [gradle, manifest, networkSecurity, packageManifest, discovery, nativeAuth, nsdDiscovery, credentialStore, webViewClient, scanActivity, qrDecoder, nativeBridge, defaultStrings, chineseStrings, italianStrings, clientSource, mobileLayoutSource, nativeMobileSource] = await Promise.all([
+  const [gradle, manifest, networkSecurity, packageManifest, discovery, nativeAuth, nsdDiscovery, credentialStore, webViewClient, scanActivity, qrDecoder, nativeBridge, nativeBridgePolicy, mainActivity, defaultStrings, chineseStrings, italianStrings, defaultColors, nightColors, clientSource, mobileLayoutSource, nativeMobileSource] = await Promise.all([
     read('apps/mobile/android/app/build.gradle.kts', 'utf8'),
     read('apps/mobile/android/app/src/main/AndroidManifest.xml', 'utf8'),
     read('apps/mobile/android/app/src/main/res/xml/network_security_config.xml', 'utf8'),
@@ -108,9 +108,13 @@ async function checkAndroid() {
     read('apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/ScanActivity.kt', 'utf8'),
     read('apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/QrDecoder.kt', 'utf8'),
     read('apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/NativeBridge.kt', 'utf8'),
+    read('apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/NativeBridgePolicy.kt', 'utf8'),
+    read('apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/MainActivity.kt', 'utf8'),
     read('apps/mobile/android/app/src/main/res/values/strings.xml', 'utf8'),
     read('apps/mobile/android/app/src/main/res/values-zh-rCN/strings.xml', 'utf8'),
     read('apps/mobile/android/app/src/main/res/values-it/strings.xml', 'utf8'),
+    read('apps/mobile/android/app/src/main/res/values/colors.xml', 'utf8'),
+    read('apps/mobile/android/app/src/main/res/values-night/colors.xml', 'utf8'),
     read('src/client.ts', 'utf8'),
     read('src/mobile-layout.ts', 'utf8'),
     read('src/native-mobile.ts', 'utf8'),
@@ -157,8 +161,23 @@ async function checkAndroid() {
   if (!qrDecoder.includes('MultiFormatReader') || !scanActivity.includes('QrDecoder.decodeNv21')) {
     fail('Android QR pairing must keep ZXing decoding wired to the scanner')
   }
-  for (const marker of ['addJavascriptInterface', '@JavascriptInterface', 'MAX_MESSAGE_BYTES', 'MAX_PENDING', 'files.pick', 'camera.capture']) {
+  if (/\.\s*addJavascriptInterface\s*\(/u.test(nativeBridge)
+    || /^\s*@(?:android\.webkit\.)?JavascriptInterface\b/mu.test(nativeBridge)) {
+    fail('Android native bridge must not use the legacy JavascriptInterface API')
+  }
+  for (const marker of ['WebViewCompat.addWebMessageListener', 'setOf(origin.serialized)', 'MAX_MESSAGE_BYTES', 'MAX_PENDING', 'files.pick', 'camera.capture']) {
     if (!nativeBridge.includes(marker)) fail(`Android native bridge is missing ${marker}`)
+  }
+  if (!nativeBridge.includes('NativeBridgePolicy.isTrustedMessage(origin, sourceOrigin.toString(), isMainFrame)')
+    || !nativeBridgePolicy.includes('isMainFrame && GatewayOrigin.parse(sourceOrigin) == origin')) {
+    fail('Android native bridge must accept only exact-origin main-frame WebMessages')
+  }
+  requireSameResourceNames(defaultColors, nightColors, 'color', 'Night theme')
+  if (!mainActivity.includes('R.color.app_setup_scrim') || mainActivity.includes('0x99FFFFFF')) {
+    fail('Android setup artwork must use the theme-aware app_setup_scrim resource')
+  }
+  if (!mainActivity.includes('DSHMobile/${BuildConfig.VERSION_NAME}')) {
+    fail('Android WebView user agent must report BuildConfig.VERSION_NAME')
   }
   for (const [source, label] of [[chineseStrings, 'Chinese'], [italianStrings, 'Italian']]) {
     requireSameResourceNames(defaultStrings, source, 'string', label)
@@ -185,18 +204,22 @@ async function checkAndroid() {
 }
 
 async function checkFunnelHost() {
-  const [manifestSource, goModule, goSum, source, executable] = await Promise.all([
+  const [manifestSource, goModule, goSum, source, executable, thirdPartyLicenses] = await Promise.all([
     read('package.json', 'utf8'),
     read('native/funnel-host/go.mod', 'utf8'),
     read('native/funnel-host/go.sum', 'utf8'),
     read('native/funnel-host/main.go', 'utf8'),
     read('bin/dsh-mobile-funnel-win32-x64.exe'),
+    read('FUNNEL_THIRD_PARTY_LICENSES.txt', 'utf8'),
   ])
   const manifest = JSON.parse(manifestSource)
   if (!manifest.files?.includes('bin/dsh-mobile-funnel-win32-x64.exe')) {
     fail('package files must include the Windows Funnel host')
   }
   if (!manifest.files?.includes('THIRD_PARTY_NOTICES.md')) fail('package files must include third-party notices')
+  if (!manifest.files?.includes('FUNNEL_THIRD_PARTY_LICENSES.txt')) {
+    fail('package files must include the generated Funnel third-party licenses')
+  }
   if (!/^go 1\.26\.6$/mu.test(goModule) || !/^require tailscale\.com v1\.102\.3$/mu.test(goModule)) {
     fail('Funnel host must pin Go 1.26.6 and Tailscale 1.102.3')
   }
@@ -205,6 +228,12 @@ async function checkFunnelHost() {
     fail('Funnel host must be a Windows executable built from the checked source')
   }
   if (executable.byteLength >= 40 * 1024 * 1024) fail('Funnel host must remain below 40 MiB')
+  if (!thirdPartyLicenses.includes('Go toolchain: go1.26.6')
+    || !thirdPartyLicenses.includes('Embedded third-party modules:')
+    || !thirdPartyLicenses.includes('--- BEGIN Go toolchain LICENSE ---')
+    || !thirdPartyLicenses.includes('--- BEGIN Go toolchain PATENTS ---')) {
+    fail('Funnel third-party license artifact is incomplete')
+  }
 }
 
 async function main() {

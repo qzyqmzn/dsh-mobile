@@ -4,6 +4,7 @@ import { isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { MobileAccessControlStore } from './control.js'
 import type { MobileAccessGateway } from './gateway.js'
+import { settleRemoteResources, terminateRemoteProcess, type RemoteProviderController } from './remote.js'
 
 const MAX_PROTOCOL_LINE_BYTES = 16 * 1024
 const FUNNEL_START_TIMEOUT_MS = 45_000
@@ -111,7 +112,7 @@ function withoutProvisioningSecrets(environment: NodeJS.ProcessEnv): NodeJS.Proc
 }
 
 /** Owns the source-built tsnet sidecar, remote gateway, and persisted remote switch. */
-export class FunnelController {
+export class FunnelController implements RemoteProviderController {
   private enabled = false
   private initialized = false
   private disposed = false
@@ -333,28 +334,15 @@ export class FunnelController {
     this.clearStartTimer()
     const child = this.child
     this.child = undefined
-    child?.stdin.end()
-    if (child !== undefined && child.exitCode === null) {
-      child.kill('SIGTERM')
-      await new Promise<void>(resolveClose => {
-        let completed = false
-        const finish = (): void => {
-          if (completed) return
-          completed = true
-          clearTimeout(timer)
-          resolveClose()
-        }
-        const timer = setTimeout(() => {
-          if (child.exitCode === null) child.kill('SIGKILL')
-          finish()
-        }, 1_500)
-        timer.unref()
-        child.once('close', finish)
-      })
-    }
     const gateway = this.gatewayValue
     this.gatewayValue = undefined
-    await gateway?.close()
+    await settleRemoteResources([
+      async () => {
+        child?.stdin.end()
+        if (child !== undefined && child.exitCode === null) await terminateRemoteProcess(child)
+      },
+      () => gateway?.close(),
+    ], 'Funnel resource cleanup failed')
   }
 
   private clearStartTimer(): void {

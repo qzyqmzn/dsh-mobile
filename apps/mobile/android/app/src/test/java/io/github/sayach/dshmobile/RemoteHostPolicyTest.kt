@@ -11,6 +11,9 @@ class RemoteHostPolicyTest {
         assertTrue(RemoteHostPolicy.isSupported("computer.tail1234.ts.net"))
         assertTrue(RemoteHostPolicy.isSupported("EXAMPLE.CPOLAR.CN"))
         assertFalse(RemoteHostPolicy.isSupported("192.168.1.20"))
+        assertTrue(RemoteHostPolicy.isRemoteCandidate("dsh.example.com"))
+        assertFalse(RemoteHostPolicy.isRemoteCandidate("192.168.1.20"))
+        assertFalse(RemoteHostPolicy.isRemoteCandidate("computer.local"))
     }
 
     @Test
@@ -25,6 +28,8 @@ class RemoteHostPolicyTest {
         assertTrue(RemoteHostPolicy.isAllowed(AccessMode.LAN, "192.168.1.20"))
         assertFalse(RemoteHostPolicy.isAllowed(AccessMode.LAN, "dsh-example.cpolar.cn"))
         assertTrue(RemoteHostPolicy.isAllowed(AccessMode.REMOTE, "dsh-example.cpolar.cn"))
-        assertFalse(RemoteHostPolicy.isAllowed(AccessMode.REMOTE, "attacker.example"))
+        assertTrue(RemoteHostPolicy.isAllowed(AccessMode.REMOTE, "dsh.example.com"))
+        assertFalse(RemoteHostPolicy.isAllowed(AccessMode.REMOTE, "computer.local"))
+        assertFalse(RemoteHostPolicy.isAllowed(AccessMode.LAN, "dsh.example.com"))
     }
 }

@@ -13,6 +13,9 @@ export const EXTENSION_LIMITS = Object.freeze({
   script: 1024 * 1024,
   css: 512 * 1024,
   asset: 8 * 1024 * 1024,
+  assetFiles: 256,
+  assetBytes: 32 * 1024 * 1024,
+  assetDepth: 8,
 })
 
 /** A misbehaving host activation must not wedge the local watcher forever. */
@@ -76,7 +79,7 @@ export interface MobileRouteRequest {
   readonly deviceId: string
 }
 
-/** Values an extension route may return. */
+/** Values an extension route may return; status is a final HTTP code from 200 through 599. */
 export interface MobileRouteResponse {
   readonly status?: number
   readonly contentType?: string
@@ -278,7 +281,11 @@ async function assetSnapshot(extensionRootReal: string): Promise<ReadonlyMap<str
   const assetsReal = await realpath(assetsPath)
   assertRealPathWithin(extensionRootReal, assetsReal, 'assets')
   const snapshots = new Map<string, LocalAssetSnapshot>()
-  const visit = async (directoryReal: string, prefix: string): Promise<void> => {
+  let totalBytes = 0
+  const visit = async (directoryReal: string, prefix: string, depth: number): Promise<void> => {
+    if (depth > EXTENSION_LIMITS.assetDepth) {
+      throw new MobileExtensionError('invalid_extension', 'asset tree exceeds its depth limit')
+    }
     assertRealPathWithin(extensionRootReal, directoryReal, 'asset directory')
     const handle = await opendir(directoryReal)
     const entries: Dirent[] = []
@@ -293,17 +300,21 @@ async function assetSnapshot(extensionRootReal: string): Promise<ReadonlyMap<str
       assertRealPathWithin(extensionRootReal, targetReal, 'asset')
       const key = prefix === '' ? entry.name : `${prefix}/${entry.name}`
       if (info.isDirectory()) {
-        await visit(targetReal, key)
+        await visit(targetReal, key, depth + 1)
         continue
       }
       if (!info.isFile() || info.size > EXTENSION_LIMITS.asset) {
         throw new MobileExtensionError('invalid_extension', 'asset must be a regular file within its size limit')
       }
       const body = await readFile(targetReal)
+      totalBytes += body.byteLength
+      if (snapshots.size >= EXTENSION_LIMITS.assetFiles || totalBytes > EXTENSION_LIMITS.assetBytes) {
+        throw new MobileExtensionError('invalid_extension', 'asset tree exceeds its aggregate limit')
+      }
       snapshots.set(key, Object.freeze({ body, digest: createHash('sha256').update(body).digest('hex'), name: entry.name }))
     }
   }
-  await visit(assetsReal, '')
+  await visit(assetsReal, '', 0)
   return snapshots
 }
 

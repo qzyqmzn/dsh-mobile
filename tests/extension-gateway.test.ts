@@ -101,7 +101,12 @@ describe('gateway extension namespace', () => {
     service.registerExtension({
       schemaVersion: 1, id: 'hello', name: 'Hello', version: '1.0.0',
       actions: { echo: { run: async (_context, input) => ({ input }) } },
-      routes: [{ method: 'GET', path: 'status', handle: async () => ({ contentType: 'application/json', body: JSON.stringify({ ok: true }) }) }],
+      routes: [
+        { method: 'GET', path: 'status', handle: async () => ({ contentType: 'application/json', body: JSON.stringify({ ok: true }) }) },
+        { method: 'GET', path: 'bad-status', handle: async () => ({ status: 99, body: 'invalid' }) },
+        { method: 'GET', path: 'bad-content-type', handle: async () => ({ contentType: 'text/plain\r\nx-extension: injected', body: 'invalid' }) },
+        { method: 'GET', path: 'bad-content-control', handle: async () => ({ contentType: 'text/plain\u0000', body: 'invalid' }) },
+      ],
     })
     const config = parseGatewayConfig({ listenHost: '127.0.0.1', listenPort: 38082, upstreamOrigin: `http://127.0.0.1:${String(upstreamPort)}`, publicAuthorities: ['127.0.0.1'], allowedCidrs: ['127.0.0.0/8'], stateFile: join(directory, 'devices.json'), tls: { mode: 'disabled' } })
     const gateway = new MobileAccessGateway(config, new MemoryDeviceStore(), service)
@@ -116,6 +121,12 @@ describe('gateway extension namespace', () => {
     expect(action.status).toBe(200); expect(JSON.parse(action.body)).toEqual({ input: { value: 1 } })
     const route = await request(gateway.address().port, '/mobile-access/extensions/hello/routes/status', { headers })
     expect(route.status).toBe(200); expect(JSON.parse(route.body)).toEqual({ ok: true })
+    const invalidStatus = await request(gateway.address().port, '/mobile-access/extensions/hello/routes/bad-status', { headers })
+    expect(invalidStatus.status).toBe(500); expect(JSON.parse(invalidStatus.body)).toEqual({ error: 'invalid_route_response' })
+    const invalidContentType = await request(gateway.address().port, '/mobile-access/extensions/hello/routes/bad-content-type', { headers })
+    expect(invalidContentType.status).toBe(500); expect(JSON.parse(invalidContentType.body)).toEqual({ error: 'invalid_route_response' })
+    const invalidContentControl = await request(gateway.address().port, '/mobile-access/extensions/hello/routes/bad-content-control', { headers })
+    expect(invalidContentControl.status).toBe(500); expect(JSON.parse(invalidContentControl.body)).toEqual({ error: 'invalid_route_response' })
   })
 
   it('routes old mobile UI requests to their retained Host and asset generation', async () => {

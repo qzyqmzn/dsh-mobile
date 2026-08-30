@@ -5,6 +5,7 @@ import {
   MOBILE_CONTROL_MESSAGES,
   type MobileControlLocale,
 } from './client-messages.js'
+import { createRestrictedFrpServerTemplate } from './frp-template.js'
 import { installNativeMobileSurface, NATIVE_MOBILE_STYLES } from './native-mobile.js'
 
 export { DIAGNOSTIC_REASON_MESSAGES, MOBILE_CONTROL_MESSAGES } from './client-messages.js'
@@ -202,6 +203,39 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: stri
 
 const CONTROL_REQUEST_TIMEOUT_MS = 15_000
 const LONG_CONTROL_REQUEST_TIMEOUT_MS = 130_000
+const GITHUB_RELEASES_URL = 'https://github.com/saya-ch/dsh-mobile/releases'
+
+export interface ClientReleaseInfo {
+  readonly updateAvailable: boolean
+  readonly latestVersion?: string
+  readonly androidVersion?: string
+  readonly androidDownloadUrl: string
+}
+
+function releaseVersion(value: unknown): string | undefined {
+  return typeof value === 'string'
+    && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(value)
+    ? value
+    : undefined
+}
+
+/** Reduce the loopback release response to trusted text and download metadata. */
+export function clientReleaseInfo(data: Readonly<Record<string, unknown>>): ClientReleaseInfo {
+  const latestVersion = releaseVersion(data.latestVersion)
+  const androidVersion = releaseVersion(data.androidVersion)
+  const expectedAndroidDownloadUrl = androidVersion === undefined
+    ? undefined
+    : `${GITHUB_RELEASES_URL}/download/v${androidVersion}/dsh-mobile-android-v${androidVersion}.apk`
+  const androidDownloadUrl = expectedAndroidDownloadUrl !== undefined && data.androidDownloadUrl === expectedAndroidDownloadUrl
+    ? expectedAndroidDownloadUrl
+    : GITHUB_RELEASES_URL
+  return {
+    updateAvailable: data.updateAvailable === true && latestVersion !== undefined,
+    ...(latestVersion === undefined ? {} : { latestVersion }),
+    ...(androidVersion === undefined ? {} : { androidVersion }),
+    androidDownloadUrl,
+  }
+}
 
 async function requestJson(
   path: string,
@@ -245,6 +279,11 @@ function officialFunnelSetupUrl(value: unknown): string {
   return url.toString()
 }
 
+/** Build the copy-only restricted VPS template without sending the token to the host API. */
+export function createFrpServerTemplateForClipboard(serverPort: number, token: string, publicOrigin: string): string {
+  return createRestrictedFrpServerTemplate(serverPort, token, publicOrigin)
+}
+
 function installControl(): { remove: () => void; toggle: () => void } {
   const locale = selectedMobileControlLocale()
   const localeTag = locale === 'it' ? 'it-IT' : locale === 'zh' ? 'zh-CN' : 'en-US'
@@ -257,10 +296,12 @@ function installControl(): { remove: () => void; toggle: () => void } {
   const header = element('header', 'dsh-mobile-control__header')
   const title = element('h2'); title.textContent = t('mobileAccess')
   const headerActions = element('div', 'dsh-mobile-control__header-actions')
+  const updatePlugin = element('button', 'dsh-mobile-control__update-plugin'); updatePlugin.type = 'button'; updatePlugin.textContent = t('updatePlugin'); updatePlugin.hidden = true
   const diagnosticsEntry = element('button', 'dsh-mobile-control__diagnostic-entry'); diagnosticsEntry.type = 'button'; diagnosticsEntry.textContent = t('diagnostics'); diagnosticsEntry.setAttribute('aria-label', t('openDiagnostics')); diagnosticsEntry.setAttribute('aria-pressed', 'false')
   const close = element('button', 'dsh-mobile-control__close'); close.type = 'button'; close.textContent = '×'; close.setAttribute('aria-label', t('collapseMobileAccess'))
-  headerActions.append(diagnosticsEntry, close)
-  const appDownload = element('a', 'dsh-mobile-control__app-download'); appDownload.href = 'https://github.com/saya-ch/dsh-mobile/releases/latest'; appDownload.target = '_blank'; appDownload.rel = 'noopener noreferrer'; appDownload.textContent = t('downloadAndroid'); appDownload.setAttribute('aria-label', t('downloadAndroidAria'))
+  headerActions.append(updatePlugin, diagnosticsEntry, close)
+  const releaseNotice = element('p', 'dsh-mobile-control__release-notice'); releaseNotice.hidden = true; releaseNotice.setAttribute('role', 'status'); releaseNotice.setAttribute('aria-live', 'polite')
+  const appDownload = element('a', 'dsh-mobile-control__app-download'); appDownload.href = GITHUB_RELEASES_URL; appDownload.target = '_blank'; appDownload.rel = 'noopener noreferrer'; appDownload.textContent = t('downloadAndroid'); appDownload.setAttribute('aria-label', t('downloadAndroidAria'))
   const switcher = element('div', 'dsh-mobile-control__switcher')
   const lanTab = element('button', 'dsh-mobile-control__tab is-active'); lanTab.type = 'button'; lanTab.textContent = t('lan')
   const remoteTab = element('button', 'dsh-mobile-control__tab'); remoteTab.type = 'button'; remoteTab.textContent = t('remote')
@@ -306,7 +347,7 @@ function installControl(): { remove: () => void; toggle: () => void } {
   const cpolarChoiceBadge = element('span', 'dsh-mobile-control__provider-badge is-cpolar'); cpolarChoiceBadge.textContent = t('mainlandPreferred')
   const cpolarChoiceDescription = element('span', 'dsh-mobile-control__provider-description'); cpolarChoiceDescription.textContent = t('cpolarDescription')
   cpolarChoiceTop.append(cpolarChoiceName, cpolarChoiceBadge); cpolarChoice.append(cpolarChoiceTop, cpolarChoiceDescription)
-  providerChoices.append(cpolarChoice, tailscaleChoice); providerSection.append(providerHeading, providerInfo, providerChoices)
+  providerChoices.append(cpolarChoice, tailscaleChoice)
   const cpolarSetup = element('section', 'dsh-mobile-control__cpolar-setup'); cpolarSetup.hidden = true
   const cpolarSetupTitle = element('h3', 'dsh-mobile-control__section-title'); cpolarSetupTitle.textContent = t('prepareCpolar')
   const cpolarComponentStatus = element('p', 'dsh-mobile-control__component-status'); cpolarComponentStatus.textContent = t('checkingComponent')
@@ -331,11 +372,77 @@ function installControl(): { remove: () => void; toggle: () => void } {
   const cpolarPurge = element('button', 'dsh-mobile-control__danger'); cpolarPurge.type = 'button'; cpolarPurge.textContent = t('purgeCpolar')
   cpolarDetailsBody.append(cpolarDetailsText, cpolarStorage, cpolarOfficial, cpolarTerms, cpolarPurge); cpolarDetails.append(cpolarDetailsSummary, cpolarDetailsBody)
   cpolarSetup.append(cpolarSetupTitle, cpolarComponentStatus, cpolarInstall, cpolarAccount, cpolarDetails)
+  const selfHosted = element('details', 'dsh-mobile-control__self-hosted')
+  const selfHostedSummary = element('summary', 'dsh-mobile-control__self-hosted-summary')
+  const selfHostedSummaryText = element('span')
+  const selfHostedSummaryTitle = element('strong'); selfHostedSummaryTitle.textContent = t('selfHostedConnections')
+  const selfHostedSummaryDescription = element('span'); selfHostedSummaryDescription.textContent = t('selfHostedDescription')
+  const selfHostedBadge = element('span', 'dsh-mobile-control__provider-badge is-frp'); selfHostedBadge.textContent = t('advanced')
+  selfHostedSummaryText.append(selfHostedSummaryTitle, selfHostedSummaryDescription); selfHostedSummary.append(selfHostedSummaryText, selfHostedBadge)
+  const selfHostedBody = element('div', 'dsh-mobile-control__self-hosted-body')
+  const frpChoice = element('button', 'dsh-mobile-control__provider is-frp'); frpChoice.type = 'button'; frpChoice.setAttribute('aria-pressed', 'false')
+  const frpChoiceTop = element('span', 'dsh-mobile-control__provider-top')
+  const frpChoiceName = element('strong'); frpChoiceName.textContent = t('frpName')
+  const frpChoiceDescription = element('span', 'dsh-mobile-control__provider-description'); frpChoiceDescription.textContent = t('frpDescription')
+  frpChoiceTop.append(frpChoiceName); frpChoice.append(frpChoiceTop, frpChoiceDescription)
+  selfHostedBody.append(frpChoice); selfHosted.append(selfHostedSummary, selfHostedBody)
+  providerSection.append(providerHeading, providerInfo, providerChoices, selfHosted)
+  const frpSetup = element('section', 'dsh-mobile-control__frp-setup'); frpSetup.hidden = true
+  const frpSetupTitle = element('h3', 'dsh-mobile-control__section-title'); frpSetupTitle.textContent = t('prepareFrp')
+  const frpStep1 = element('section', 'dsh-mobile-control__frp-step')
+  const frpStep1Title = element('strong'); frpStep1Title.textContent = t('frpStep1Title')
+  const frpStep1Text = element('p'); frpStep1Text.textContent = t('frpStep1Text')
+  const frpFields = element('div', 'dsh-mobile-control__frp-fields')
+  const frpServerLabel = element('label', 'dsh-mobile-control__field'); frpServerLabel.textContent = t('frpServerAddress')
+  const frpServer = element('input'); frpServer.type = 'text'; frpServer.autocomplete = 'off'; frpServer.spellcheck = false; frpServer.placeholder = t('frpServerAddressPlaceholder')
+  const frpPortLabel = element('label', 'dsh-mobile-control__field'); frpPortLabel.textContent = t('frpServerPort')
+  const frpPort = element('input'); frpPort.type = 'number'; frpPort.inputMode = 'numeric'; frpPort.min = '1'; frpPort.max = '65535'; frpPort.value = '7000'
+  const frpTokenLabel = element('label', 'dsh-mobile-control__field'); frpTokenLabel.textContent = t('frpToken')
+  const frpToken = element('input'); frpToken.type = 'password'; frpToken.autocomplete = 'off'; frpToken.spellcheck = false; frpToken.placeholder = t('frpTokenPlaceholder')
+  const frpOriginLabel = element('label', 'dsh-mobile-control__field'); frpOriginLabel.textContent = t('frpPublicOrigin')
+  const frpOrigin = element('input'); frpOrigin.type = 'url'; frpOrigin.autocomplete = 'off'; frpOrigin.spellcheck = false; frpOrigin.placeholder = t('frpPublicOriginPlaceholder')
+  frpServerLabel.append(frpServer); frpPortLabel.append(frpPort); frpTokenLabel.append(frpToken); frpOriginLabel.append(frpOrigin)
+  frpFields.append(frpServerLabel, frpPortLabel, frpTokenLabel, frpOriginLabel); frpStep1.append(frpStep1Title, frpStep1Text, frpFields)
+  const frpStep2 = element('section', 'dsh-mobile-control__frp-step')
+  const frpStep2Title = element('strong'); frpStep2Title.textContent = t('frpStep2Title')
+  const frpStep2Text = element('p'); frpStep2Text.textContent = t('frpStep2Text')
+  const frpCopyTemplate = element('button', 'dsh-mobile-control__secondary dsh-mobile-control__frp-action'); frpCopyTemplate.type = 'button'; frpCopyTemplate.textContent = t('copyServerTemplate')
+  frpStep2.append(frpStep2Title, frpStep2Text, frpCopyTemplate)
+  const frpStep3 = element('section', 'dsh-mobile-control__frp-step')
+  const frpStep3Title = element('strong'); frpStep3Title.textContent = t('frpStep3Title')
+  const frpStep3Text = element('p'); frpStep3Text.textContent = t('frpStep3Text')
+  const frpComponentStatus = element('p', 'dsh-mobile-control__component-status'); frpComponentStatus.textContent = t('checkingComponent')
+  const frpInstall = element('button', 'dsh-mobile-control__primary dsh-mobile-control__frp-action'); frpInstall.type = 'button'; frpInstall.textContent = t('installFrpc')
+  frpStep3.append(frpStep3Title, frpStep3Text, frpComponentStatus, frpInstall)
+  const frpStep4 = element('section', 'dsh-mobile-control__frp-step')
+  const frpStep4Title = element('strong'); frpStep4Title.textContent = t('frpStep4Title')
+  const frpStep4Text = element('p'); frpStep4Text.textContent = t('frpStep4Text')
+  const frpAppRequirement = element('p', 'dsh-mobile-control__frp-requirement'); frpAppRequirement.textContent = t('frpAppRequirement')
+  const frpConfigurationStatus = element('p', 'dsh-mobile-control__component-status'); frpConfigurationStatus.textContent = t('frpConfigurationMissing')
+  const frpConfigure = element('button', 'dsh-mobile-control__primary dsh-mobile-control__frp-action'); frpConfigure.type = 'button'; frpConfigure.textContent = t('frpSaveConnect')
+  frpStep4.append(frpStep4Title, frpStep4Text, frpAppRequirement, frpConfigurationStatus, frpConfigure)
+  const frpDetails = element('details', 'dsh-mobile-control__details')
+  const frpDetailsSummary = element('summary'); frpDetailsSummary.textContent = t('frpComponentDetails')
+  const frpDetailsBody = element('div', 'dsh-mobile-control__details-body')
+  const frpDetailsText = element('p'); frpDetailsText.textContent = t('frpComponentDetailsText')
+  const frpStorage = element('code', 'dsh-mobile-control__storage'); frpStorage.textContent = t('pluginPrivateDirectory')
+  const frpOfficial = element('a', 'dsh-mobile-control__text-link'); frpOfficial.href = 'https://github.com/fatedier/frp/releases/tag/v0.70.1'; frpOfficial.target = '_blank'; frpOfficial.rel = 'noopener noreferrer'; frpOfficial.textContent = t('frpOfficialRelease')
+  const frpPurge = element('button', 'dsh-mobile-control__danger'); frpPurge.type = 'button'; frpPurge.textContent = t('purgeFrp')
+  frpDetailsBody.append(frpDetailsText, frpStorage, frpOfficial, frpPurge); frpDetails.append(frpDetailsSummary, frpDetailsBody)
+  frpSetup.append(frpSetupTitle, frpStep1, frpStep2, frpStep3, frpStep4, frpDetails)
   const tailscaleInfo = element('details', 'dsh-mobile-control__details')
   const tailscaleInfoSummary = element('summary'); tailscaleInfoSummary.textContent = t('tailscaleHelp')
   const tailscaleInfoBody = element('div', 'dsh-mobile-control__details-body')
   const tailscaleInfoText = element('p'); tailscaleInfoText.textContent = t('tailscaleHelpText')
   tailscaleInfoBody.append(tailscaleInfoText); tailscaleInfo.append(tailscaleInfoSummary, tailscaleInfoBody)
+  const providerSetupHeader = element('div', 'dsh-mobile-control__stage-header')
+  const providerSetupHeading = element('h3', 'dsh-mobile-control__section-title'); providerSetupHeading.textContent = t('currentProvider')
+  const providerSetupName = element('span', 'dsh-mobile-control__stage-value'); providerSetupName.textContent = 'Tailscale Funnel'
+  const remoteStateBadge = element('span', 'dsh-mobile-control__state-badge'); remoteStateBadge.textContent = t('remoteStateOff')
+  const providerSetupMeta = element('div', 'dsh-mobile-control__stage-meta'); providerSetupMeta.append(providerSetupName, remoteStateBadge)
+  providerSetupHeader.append(providerSetupHeading, providerSetupMeta)
+  const providerSetupBody = element('div', 'dsh-mobile-control__provider-setup-body')
+  providerSetupBody.append(cpolarSetup, frpSetup, tailscaleInfo)
   const remoteAccess = element('div', 'dsh-mobile-control__access'); remoteAccess.hidden = true
   const remoteAccessLabel = element('span', 'dsh-mobile-control__access-label'); remoteAccessLabel.textContent = t('remoteAddress')
   const remoteAccessLink = element('a', 'dsh-mobile-control__access-link'); remoteAccessLink.target = '_blank'; remoteAccessLink.rel = 'noreferrer'; remoteAccess.append(remoteAccessLabel, remoteAccessLink)
@@ -364,6 +471,8 @@ function installControl(): { remove: () => void; toggle: () => void } {
   const remoteReset = element('button', 'dsh-mobile-control__manage'); remoteReset.type = 'button'; remoteReset.textContent = t('resetRemoteLogin')
   remoteManageRow.append(remoteDevices, remoteReset)
   const remoteDevicePanel = element('div', 'dsh-mobile-control__devices'); remoteDevicePanel.hidden = true
+  const remoteWorkspace = element('section', 'dsh-mobile-control__remote-workspace')
+  remoteWorkspace.append(providerSetupHeader, remoteStatus, remoteAccess, remoteGuide, providerSetupBody, remoteActions, remoteQr, remoteManageRow, remoteDevicePanel)
   const diagnosticsView = element('div', 'dsh-mobile-control__view is-diagnostics'); diagnosticsView.hidden = true
   const diagnosticsIntro = element('p', 'dsh-mobile-control__intro'); diagnosticsIntro.textContent = t('diagnosticsIntro')
   const diagnosticsSummary = element('section', 'dsh-mobile-control__diagnostic-summary is-idle'); diagnosticsSummary.setAttribute('aria-live', 'polite')
@@ -388,14 +497,14 @@ function installControl(): { remove: () => void; toggle: () => void } {
   diagnosticsDetails.append(diagnosticsDetailsSummary, diagnosticsReport)
   header.append(title, headerActions); actions.append(toggle, pair, linkPair)
   lanView.append(access, qrBox, status, extensionStatus, actions, manageRow, devicePanel)
-  remoteView.append(remoteIntro, providerSection, cpolarSetup, tailscaleInfo, remoteAccess, remoteQr, remoteStatus, remoteGuide, remoteActions, remoteManageRow, remoteDevicePanel)
+  remoteView.append(remoteIntro, providerSection, remoteWorkspace)
   diagnosticsView.append(diagnosticsIntro, diagnosticsSummary, diagnosticsToolbar, diagnosticsFeedback, diagnosticsChecks, diagnosticsDetails)
-  panel.append(header, appDownload, switcher, lanView, remoteView, diagnosticsView); root.append(panel); document.body.append(root)
+  panel.append(header, releaseNotice, appDownload, switcher, lanView, remoteView, diagnosticsView); root.append(panel); document.body.append(root)
   let running = false
   let origin = ''
   let remoteRunning = false
   let remoteReady = false
-  let remoteProvider: 'tailscale' | 'cpolar' = 'tailscale'
+  let remoteProvider: 'tailscale' | 'cpolar' | 'frp' = 'tailscale'
   let remoteLoginUrl = ''
   let remoteSetupUrl = ''
   let remoteSetupPending = false
@@ -404,11 +513,32 @@ function installControl(): { remove: () => void; toggle: () => void } {
   let remoteProviderBusy = false
   let cpolarInstalled = false
   let cpolarConfigured = false
+  let frpInstalled = false
+  let frpConfigured = false
+  let frpDownloadSize = '14.0'
+  let configuredFrpServer = ''
+  let configuredFrpPort = 7000
+  let configuredFrpOrigin = ''
   let providerInfoPinned = false
   let providerInfoHovered = false
   let previousAccessView: 'lan' | 'remote' = 'lan'
   let diagnosticsBusy = false
   let copiedDiagnosticReport = ''
+  let pluginUpdateAvailable = false
+  let pluginLatestVersion = ''
+  const renderRelease = (data: Record<string, unknown>): void => {
+    const release = clientReleaseInfo(data)
+    pluginUpdateAvailable = release.updateAvailable
+    pluginLatestVersion = release.latestVersion ?? ''
+    updatePlugin.hidden = !pluginUpdateAvailable || !diagnosticsView.hidden
+    updatePlugin.textContent = t('updatePlugin')
+    if (pluginLatestVersion !== '') updatePlugin.setAttribute('aria-label', t('updatePluginAria', { version: pluginLatestVersion }))
+    if (release.androidVersion !== undefined) {
+      appDownload.textContent = t('downloadAndroidVersion', { version: release.androidVersion })
+      appDownload.setAttribute('aria-label', t('downloadAndroidVersionAria', { version: release.androidVersion }))
+    }
+    appDownload.href = release.androidDownloadUrl
+  }
   const syncProviderInfo = (): void => {
     const open = providerInfoPinned || providerInfoHovered || providerInfo.contains(document.activeElement)
     providerInfoPopover.hidden = !open
@@ -438,6 +568,7 @@ function installControl(): { remove: () => void; toggle: () => void } {
     diagnosticsEntry.setAttribute('aria-pressed', String(view === 'diagnostics'))
     diagnosticsEntry.textContent = view === 'diagnostics' ? t('back') : t('diagnostics')
     diagnosticsEntry.setAttribute('aria-label', view === 'diagnostics' ? t('backToMobile') : t('openDiagnostics'))
+    updatePlugin.hidden = view === 'diagnostics' || !pluginUpdateAvailable
     appDownload.hidden = view === 'diagnostics'
     switcher.hidden = view === 'diagnostics'
     title.textContent = view === 'lan' ? t('lanAccess') : view === 'remote' ? t('remoteAccess') : t('connectionDiagnostics')
@@ -544,17 +675,25 @@ function installControl(): { remove: () => void; toggle: () => void } {
   })
   const renderRemote = (data: Record<string, unknown>): void => {
     remoteRunning = data.running === true
-    remoteProvider = data.provider === 'cpolar' ? 'cpolar' : 'tailscale'
+    remoteProvider = data.provider === 'cpolar' ? 'cpolar' : data.provider === 'frp' ? 'frp' : 'tailscale'
     const cpolar = remoteProvider === 'cpolar'
-    tailscaleChoice.classList.toggle('is-selected', !cpolar)
+    const frp = remoteProvider === 'frp'
+    const tailscale = remoteProvider === 'tailscale'
+    tailscaleChoice.classList.toggle('is-selected', tailscale)
     cpolarChoice.classList.toggle('is-selected', cpolar)
-    tailscaleChoice.setAttribute('aria-checked', String(!cpolar))
+    frpChoice.classList.toggle('is-selected', frp)
+    tailscaleChoice.setAttribute('aria-checked', String(tailscale))
     cpolarChoice.setAttribute('aria-checked', String(cpolar))
+    frpChoice.setAttribute('aria-pressed', String(frp))
+    providerSetupName.textContent = cpolar ? 'cpolar' : frp ? t('frpName') : 'Tailscale Funnel'
     tailscaleChoice.disabled = remoteProviderBusy
     cpolarChoice.disabled = remoteProviderBusy
+    frpChoice.disabled = remoteProviderBusy
     cpolarSetup.hidden = !cpolar
-    tailscaleInfo.hidden = cpolar
-    remoteReset.textContent = cpolar ? t('resetRemoteDevices') : t('resetRemoteLogin')
+    frpSetup.hidden = !frp
+    if (frp) selfHosted.open = true
+    tailscaleInfo.hidden = !tailscale
+    remoteReset.textContent = tailscale ? t('resetRemoteLogin') : t('resetRemoteDevices')
     const providers = data.providers !== null && typeof data.providers === 'object' ? data.providers as Record<string, unknown> : {}
     const cpolarProvider = providers.cpolar !== null && typeof providers.cpolar === 'object' ? providers.cpolar as Record<string, unknown> : {}
     const component = cpolarProvider.component !== null && typeof cpolarProvider.component === 'object'
@@ -584,11 +723,45 @@ function installControl(): { remove: () => void; toggle: () => void } {
         : !cpolarConfigured
           ? t('cpolarNeedsToken', { version: componentVersion })
           : t('cpolarReady', { version: componentVersion })
+    const frpProvider = providers.frp !== null && typeof providers.frp === 'object' ? providers.frp as Record<string, unknown> : {}
+    const frpComponent = frpProvider.component !== null && typeof frpProvider.component === 'object'
+      ? frpProvider.component as Record<string, unknown>
+      : {}
+    const frpConfiguration = frpProvider.configuration !== null && typeof frpProvider.configuration === 'object'
+      ? frpProvider.configuration as Record<string, unknown>
+      : {}
+    frpInstalled = frpComponent.installed === true
+    frpConfigured = frpConfiguration.configured === true
+    const frpSupported = frpComponent.supported !== false
+    const frpVersion = typeof frpComponent.version === 'string' ? frpComponent.version : ''
+    const frpDownloadBytes = typeof frpComponent.downloadBytes === 'number' ? frpComponent.downloadBytes : 0
+    if (frpDownloadBytes > 0) frpDownloadSize = formatMegabytes(frpDownloadBytes)
+    const frpStoragePath = typeof frpComponent.storagePath === 'string' ? frpComponent.storagePath : `DSH Mobile ${t('pluginPrivateDirectory')}`
+    configuredFrpServer = typeof frpConfiguration.serverAddress === 'string' ? frpConfiguration.serverAddress : ''
+    configuredFrpPort = typeof frpConfiguration.serverPort === 'number' ? frpConfiguration.serverPort : 7000
+    configuredFrpOrigin = typeof frpConfiguration.publicOrigin === 'string' ? frpConfiguration.publicOrigin : ''
+    if (frpServer.value === '' && configuredFrpServer !== '') frpServer.value = configuredFrpServer
+    if ((frpPort.value === '' || frpPort.value === '7000') && configuredFrpPort !== 7000) frpPort.value = String(configuredFrpPort)
+    if (frpOrigin.value === '' && configuredFrpOrigin !== '') frpOrigin.value = configuredFrpOrigin
+    frpStorage.textContent = frpStoragePath
+    frpStorage.title = frpStoragePath
+    frpInstall.hidden = frpInstalled || !frpSupported
+    frpInstall.textContent = frpDownloadBytes > 0
+      ? t('installWithSize', { size: formatMegabytes(frpDownloadBytes) })
+      : t('installFrpc')
+    frpInstall.disabled = remoteProviderBusy
+    frpConfigure.disabled = remoteProviderBusy || !frpInstalled
+    frpPurge.hidden = !frpInstalled && !frpConfigured
+    frpComponentStatus.textContent = !frpSupported
+      ? t('frpUnsupported')
+      : frpInstalled ? t('frpComponentReady', { version: frpVersion }) : t('frpNotInstalled')
+    frpConfigurationStatus.textContent = frpConfigured ? t('frpConfigurationReady') : t('frpConfigurationMissing')
+    selfHostedBadge.textContent = frpConfigured && frpInstalled ? t('ready') : t('advanced')
     const state = typeof data.state === 'string' ? data.state : 'error'
     const errorCode = typeof data.errorCode === 'string' ? data.errorCode : ''
     const remoteOrigin = typeof data.origin === 'string' ? data.origin : ''
     remoteLoginUrl = typeof data.loginUrl === 'string' ? data.loginUrl : ''
-    const candidateSetupUrl = cpolar ? '' : officialFunnelSetupUrl(data.setupUrl)
+    const candidateSetupUrl = tailscale ? officialFunnelSetupUrl(data.setupUrl) : ''
     const fallbackSetupUrls: Record<string, string> = {
       funnel_permission_required: 'https://tailscale.com/s/no-funnel',
       funnel_https_required: 'https://tailscale.com/s/https',
@@ -597,6 +770,16 @@ function installControl(): { remove: () => void; toggle: () => void } {
     remoteSetupUrl = candidateSetupUrl !== '' ? candidateSetupUrl : (fallbackSetupUrls[errorCode] ?? '')
     const needsFunnelSetup = state === 'error' && remoteSetupUrl !== ''
     remoteReady = remoteRunning && state === 'ready' && remoteOrigin !== ''
+    remoteStateBadge.classList.toggle('is-ready', remoteReady)
+    remoteStateBadge.classList.toggle('is-busy', state === 'starting' || state === 'connecting' || state === 'needs-login')
+    remoteStateBadge.classList.toggle('is-attention', state === 'error' || state === 'unavailable')
+    remoteStateBadge.textContent = remoteReady
+      ? t('ready')
+      : state === 'starting' || state === 'connecting' || state === 'needs-login'
+        ? t('remoteStateConnecting')
+        : state === 'error' || state === 'unavailable'
+          ? t('remoteStateAttention')
+          : t('remoteStateOff')
     remoteAccess.hidden = !remoteReady
     remoteAccessLink.href = remoteOrigin
     remoteAccessLink.textContent = remoteOrigin
@@ -604,10 +787,10 @@ function installControl(): { remove: () => void; toggle: () => void } {
     remoteStatus.classList.toggle('is-running', remoteReady)
     const labels: Record<string, string> = {
       off: t('remoteOff'),
-      unavailable: cpolar ? t('remoteUnavailableCpolar') : t('remoteUnavailableTailscale'),
-      starting: cpolar ? t('remoteStartingCpolar') : t('remoteStartingTailscale'),
+      unavailable: cpolar ? t('remoteUnavailableCpolar') : frp ? t('remoteUnavailableFrp') : t('remoteUnavailableTailscale'),
+      starting: cpolar ? t('remoteStartingCpolar') : frp ? t('remoteStartingFrp') : t('remoteStartingTailscale'),
       'needs-login': t('remoteNeedsLogin'),
-      connecting: cpolar ? t('remoteConnectingCpolar') : t('remoteConnectingTailscale'),
+      connecting: cpolar ? t('remoteConnectingCpolar') : frp ? t('remoteConnectingFrp') : t('remoteConnectingTailscale'),
       ready: t('remoteReady'),
       error: t('remoteError'),
     }
@@ -630,6 +813,18 @@ function installControl(): { remove: () => void; toggle: () => void } {
       cpolar_exited: t('cpolarExited'),
       cpolar_invalid_output: t('cpolarOutputInvalid'),
       cpolar_invalid_origin: t('cpolarOriginInvalid'),
+      frp_component_missing: t('frpMissing'),
+      frp_component_invalid: t('frpInvalid'),
+      frp_config_missing: t('frpConfigMissing'),
+      frp_config_verify_failed: t('frpConfigVerifyFailed'),
+      frp_vhost_publicly_reachable: t('frpVhostPublic'),
+      frp_vhost_probe_failed: t('frpVhostProbeFailed'),
+      frp_launch_failed: t('frpLaunchFailed'),
+      frp_start_timeout: t('frpTimeout'),
+      frp_discovery_mismatch: t('frpDiscoveryMismatch'),
+      frp_discovery_invalid: t('frpDiscoveryInvalid'),
+      frp_stopped: t('frpStopped'),
+      frp_exited: t('frpExited'),
     }
     remoteStatus.textContent = remoteSetupPending && needsFunnelSetup
       ? t('setupOpened')
@@ -638,11 +833,12 @@ function installControl(): { remove: () => void; toggle: () => void } {
     remoteSetup.disabled = remoteSetupUrl === '' || remoteReconnectBusy
     remoteSetupRetry.disabled = remoteReconnectBusy
     remoteToggle.textContent = remoteRunning ? t('disableRemote') : t('enableRemote')
-    remoteToggle.disabled = remoteProviderBusy || (cpolar && (!cpolarInstalled || !cpolarConfigured))
-    remoteLogin.hidden = cpolar || state !== 'needs-login' || remoteLoginUrl === ''
+    const providerPrepared = cpolar ? cpolarInstalled && cpolarConfigured : frp ? frpInstalled && frpConfigured : true
+    remoteToggle.disabled = remoteProviderBusy || !providerPrepared
+    remoteLogin.hidden = !tailscale || state !== 'needs-login' || remoteLoginUrl === ''
     remoteReconnect.hidden = needsFunnelSetup || (state !== 'error' && state !== 'unavailable')
-      || (cpolar && (!cpolarInstalled || !cpolarConfigured))
-    remoteActions.hidden = cpolar && (!cpolarInstalled || !cpolarConfigured)
+      || !providerPrepared
+    remoteActions.hidden = !providerPrepared
     remotePair.disabled = !remoteReady
     remoteDevices.disabled = !remoteReady
     if (!remoteReady) remoteQr.hidden = true
@@ -656,19 +852,21 @@ function installControl(): { remove: () => void; toggle: () => void } {
       .then(renderRemote, error => { remoteStatus.textContent = t('requestFailed', { error: String(error) }) })
       .finally(() => { remoteLoadInFlight = false })
   }
-  const chooseRemoteProvider = (provider: 'tailscale' | 'cpolar'): void => {
+  const chooseRemoteProvider = (provider: 'tailscale' | 'cpolar' | 'frp'): void => {
     if (remoteProviderBusy || provider === remoteProvider) return
     if (remoteRunning && !window.confirm(t('switchProviderConfirm'))) return
     remoteProviderBusy = true
     tailscaleChoice.disabled = true
     cpolarChoice.disabled = true
-    remoteStatus.textContent = provider === 'cpolar' ? t('switchingCpolar') : t('switchingTailscale')
+    frpChoice.disabled = true
+    remoteStatus.textContent = provider === 'cpolar' ? t('switchingCpolar') : provider === 'frp' ? t('switchingFrp') : t('switchingTailscale')
     void controlRequestJson('/api/mobile-access/remote/provider', { method: 'POST', body: JSON.stringify({ provider }) })
       .then(renderRemote, error => { remoteStatus.textContent = t('requestFailed', { error: String(error) }) })
       .finally(() => { remoteProviderBusy = false; loadRemote() })
   }
   tailscaleChoice.addEventListener('click', () => { chooseRemoteProvider('tailscale') })
   cpolarChoice.addEventListener('click', () => { chooseRemoteProvider('cpolar') })
+  frpChoice.addEventListener('click', () => { chooseRemoteProvider('frp') })
   cpolarInstall.addEventListener('click', () => {
     if (remoteProviderBusy) return
     const accepted = window.confirm(t('installConfirm'))
@@ -712,6 +910,79 @@ function installControl(): { remove: () => void; toggle: () => void } {
       .then(renderRemote, error => { remoteStatus.textContent = t('purgeFailed', { error: String(error) }) })
       .finally(() => { remoteProviderBusy = false; cpolarPurge.disabled = false; loadRemote() })
   })
+  const validFrpServer = (value: string): boolean => value === value.trim() && value.length > 0 && value.length <= 253
+    && !/[\s\u0000-\u001f\u007f/\\@?#]/u.test(value)
+  const frpForm = (): { readonly serverAddress: string; readonly serverPort: number; readonly token: string; readonly publicOrigin: string } => ({
+    serverAddress: frpServer.value.trim(),
+    serverPort: Number(frpPort.value),
+    token: frpToken.value,
+    publicOrigin: frpOrigin.value.trim(),
+  })
+  const validFrpForm = (form: ReturnType<typeof frpForm>): boolean => {
+    if (!validFrpServer(form.serverAddress)) return false
+    try {
+      createFrpServerTemplateForClipboard(form.serverPort, form.token, form.publicOrigin)
+      return true
+    } catch { return false }
+  }
+  frpCopyTemplate.addEventListener('click', () => {
+    const form = frpForm()
+    if (!validFrpForm(form)) {
+      remoteStatus.textContent = t('frpInputInvalid')
+      return
+    }
+    void navigator.clipboard.writeText(createFrpServerTemplateForClipboard(form.serverPort, form.token, form.publicOrigin))
+      .then(() => { remoteStatus.textContent = t('templateCopied') }, () => { remoteStatus.textContent = t('templateCopyFailed') })
+  })
+  frpInstall.addEventListener('click', () => {
+    if (remoteProviderBusy) return
+    const accepted = window.confirm(t('frpInstallConfirm', { size: frpDownloadSize }))
+    if (!accepted) return
+    remoteProviderBusy = true
+    frpInstall.disabled = true
+    frpInstall.textContent = t('downloading')
+    remoteStatus.textContent = t('installingFrp')
+    void controlRequestJson('/api/mobile-access/remote/frp/component/install', { method: 'POST', body: JSON.stringify({ confirm: true }) }, LONG_CONTROL_REQUEST_TIMEOUT_MS)
+      .then(renderRemote, error => { remoteStatus.textContent = t('installFailed', { error: String(error) }) })
+      .finally(() => { remoteProviderBusy = false; loadRemote() })
+  })
+  frpConfigure.addEventListener('click', () => {
+    if (remoteProviderBusy || !frpInstalled) return
+    const form = frpForm()
+    const unchanged = frpConfigured && form.token === '' && form.serverAddress === configuredFrpServer
+      && form.serverPort === configuredFrpPort && form.publicOrigin === configuredFrpOrigin
+    if (!unchanged && !validFrpForm(form)) {
+      remoteStatus.textContent = t('frpInputInvalid')
+      return
+    }
+    remoteProviderBusy = true
+    frpConfigure.disabled = true
+    frpConfigure.setAttribute('aria-busy', 'true')
+    frpConfigure.textContent = t('saving')
+    const configure = unchanged
+      ? Promise.resolve<Record<string, unknown>>({})
+      : controlRequestJson('/api/mobile-access/remote/frp/configure', { method: 'POST', body: JSON.stringify(form) })
+    void configure.then(() => {
+      frpToken.value = ''
+      remoteStatus.textContent = t('frpSavingConnecting')
+      return controlRequestJson('/api/mobile-access/remote/control', { method: 'POST', body: JSON.stringify({ running: true }) })
+    }).then(renderRemote, error => { remoteStatus.textContent = t('configureFailed', { error: String(error) }) })
+      .finally(() => {
+        remoteProviderBusy = false
+        frpConfigure.setAttribute('aria-busy', 'false')
+        frpConfigure.textContent = t('frpSaveConnect')
+        loadRemote()
+      })
+  })
+  frpPurge.addEventListener('click', () => {
+    if (remoteProviderBusy || !window.confirm(t('purgeFrpConfirm'))) return
+    remoteProviderBusy = true
+    frpPurge.disabled = true
+    remoteStatus.textContent = t('purgingFrp')
+    void controlRequestJson('/api/mobile-access/remote/frp/component/purge', { method: 'POST', body: JSON.stringify({ confirm: true }) }, LONG_CONTROL_REQUEST_TIMEOUT_MS)
+      .then(renderRemote, error => { remoteStatus.textContent = t('purgeFailed', { error: String(error) }) })
+      .finally(() => { remoteProviderBusy = false; frpPurge.disabled = false; loadRemote() })
+  })
   remoteToggle.addEventListener('click', () => {
     remoteToggle.disabled = true
     void controlRequestJson('/api/mobile-access/remote/control', { method: 'POST', body: JSON.stringify({ running: !remoteRunning }) })
@@ -727,7 +998,7 @@ function installControl(): { remove: () => void; toggle: () => void } {
     remoteReconnect.disabled = true
     remoteSetup.disabled = true
     remoteSetupRetry.disabled = true
-    remoteStatus.textContent = remoteProvider === 'cpolar' ? t('reconnectingCpolar') : t('reconnectingTailscale')
+    remoteStatus.textContent = remoteProvider === 'cpolar' ? t('reconnectingCpolar') : remoteProvider === 'frp' ? t('reconnectingFrp') : t('reconnectingTailscale')
     void controlRequestJson('/api/mobile-access/remote/reconnect', { method: 'POST', body: '{}' })
       .then(renderRemote, error => { remoteStatus.textContent = t('requestFailed', { error: String(error) }) })
       .finally(() => {
@@ -794,7 +1065,7 @@ function installControl(): { remove: () => void; toggle: () => void } {
   remoteReset.addEventListener('click', () => {
     const prompt = remoteProvider === 'cpolar'
       ? t('resetCpolarConfirm')
-      : t('resetTailscaleConfirm')
+      : remoteProvider === 'frp' ? t('resetFrpConfirm') : t('resetTailscaleConfirm')
     if (!window.confirm(prompt)) return
     void controlRequestJson('/api/mobile-access/remote/reset', { method: 'POST', body: JSON.stringify({ confirm: true }) })
       .then(renderRemote, error => { remoteStatus.textContent = t('requestFailed', { error: String(error) }) })
@@ -820,7 +1091,7 @@ function installControl(): { remove: () => void; toggle: () => void } {
       if (templates === undefined) return serverCopy
       const facts = entry.facts !== null && typeof entry.facts === 'object' ? entry.facts as Record<string, unknown> : {}
       const values: Record<string, string> = {
-        provider: facts.provider === 'tailscale' || facts.provider === 'cpolar' ? facts.provider : '',
+        provider: facts.provider === 'tailscale' || facts.provider === 'cpolar' || facts.provider === 'frp' ? facts.provider : '',
         latencyMs: typeof facts.latencyMs === 'number' && Number.isFinite(facts.latencyMs) ? new Intl.NumberFormat(localeTag).format(facts.latencyMs) : '',
         interfaceName: typeof facts.interfaceName === 'string' ? facts.interfaceName : '',
         endpointSuffix: typeof facts.endpointSuffix === 'string' ? facts.endpointSuffix : '',
@@ -839,7 +1110,8 @@ function installControl(): { remove: () => void; toggle: () => void } {
         const controllerActionKeys: Readonly<Record<string, string>> = {
           component_missing: 'remoteUnavailableTailscale', funnel_permission_required: 'funnelPermission', funnel_https_required: 'funnelHttps', funnel_start_failed: 'funnelStart', funnel_start_timeout: 'funnelTimeout', tailscale_dns_missing: 'tailscaleDnsMissing',
           sidecar_launch_failed: 'remoteUnavailableTailscale', sidecar_stopped: 'controlChannelFailed', sidecar_exited: 'controlChannelFailed', control_channel_failed: 'controlChannelFailed',
-          cpolar_component_missing: 'cpolarMissing', cpolar_component_invalid: 'cpolarInvalid', cpolar_config_missing: 'cpolarConfigMissing', cpolar_config_invalid: 'cpolarConfigInvalid', cpolar_start_timeout: 'cpolarTimeout', cpolar_stopped: 'cpolarStopped', cpolar_exited: 'cpolarExited', gateway_start_failed: 'gatewayStartFailed',
+          cpolar_component_missing: 'cpolarMissing', cpolar_component_invalid: 'cpolarInvalid', cpolar_config_missing: 'cpolarConfigMissing', cpolar_config_invalid: 'cpolarConfigInvalid', cpolar_start_timeout: 'cpolarTimeout', cpolar_stopped: 'cpolarStopped', cpolar_exited: 'cpolarExited',
+          frp_component_missing: 'frpMissing', frp_component_invalid: 'frpInvalid', frp_config_missing: 'frpConfigMissing', frp_config_verify_failed: 'frpConfigVerifyFailed', frp_vhost_publicly_reachable: 'frpVhostPublic', frp_vhost_probe_failed: 'frpVhostProbeFailed', frp_launch_failed: 'frpLaunchFailed', frp_start_timeout: 'frpTimeout', frp_discovery_mismatch: 'frpDiscoveryMismatch', frp_discovery_invalid: 'frpDiscoveryInvalid', frp_stopped: 'frpStopped', frp_exited: 'frpExited', gateway_start_failed: 'gatewayStartFailed',
         }
         const actionKey = controllerActionKeys[values.controllerCode ?? '']
         if (actionKey !== undefined) action = t(actionKey)
@@ -943,6 +1215,25 @@ function installControl(): { remove: () => void; toggle: () => void } {
     selectView('diagnostics'); loadDiagnostics()
   })
   diagnosticsRun.addEventListener('click', loadDiagnostics)
+  updatePlugin.addEventListener('click', () => {
+    if (!pluginUpdateAvailable || pluginLatestVersion === '') return
+    updatePlugin.disabled = true
+    updatePlugin.textContent = t('updatingPlugin')
+    releaseNotice.hidden = true
+    releaseNotice.classList.remove('is-error')
+    void controlRequestJson('/api/mobile-access/release/update', { method: 'POST', body: '{}' }, LONG_CONTROL_REQUEST_TIMEOUT_MS).then(data => {
+      const installedVersion = releaseVersion(data.installedVersion) ?? pluginLatestVersion
+      pluginUpdateAvailable = false
+      updatePlugin.hidden = true
+      releaseNotice.textContent = t('pluginUpdatedRestart', { version: installedVersion })
+      releaseNotice.hidden = false
+    }, error => {
+      updatePlugin.textContent = t('updatePlugin')
+      releaseNotice.textContent = t('pluginUpdateFailed', { error: String(error) })
+      releaseNotice.classList.add('is-error')
+      releaseNotice.hidden = false
+    }).finally(() => { updatePlugin.disabled = false })
+  })
   diagnosticsCopy.addEventListener('click', () => {
     if (copiedDiagnosticReport === '') return
     void navigator.clipboard.writeText(copiedDiagnosticReport).then(() => {
@@ -967,6 +1258,7 @@ function installControl(): { remove: () => void; toggle: () => void } {
     if (!panel.contains(event.target) && !document.querySelector('.dsh-mobile-control__trigger')?.contains(event.target)) setOpen(false)
   }
   document.addEventListener('pointerdown', dismiss)
+  void controlRequestJson('/api/mobile-access/release').then(renderRelease, () => {})
   void controlRequestJson('/api/mobile-access/lan/control').then(render, error => { status.textContent = t('requestFailed', { error: String(error) }) })
   loadRemote()
   const remotePoll = window.setInterval(() => { if (!panel.hidden && !remoteView.hidden) loadRemote() }, 1_500)
@@ -1932,17 +2224,20 @@ async function refreshCssLegacy(style: HTMLStyleElement, signal: AbortSignal, st
   } catch { return false }
 }
 
-const CONTROL_STYLES = `
+/** Theme-aware desktop Mobile Access panel styles. */
+export const CONTROL_STYLES = `
 .dsh-mobile-control{position:fixed;z-index:1000;left:16px;bottom:112px;font:14px/1.45 system-ui;color:var(--dsw-alias-label-primary,#16181d)}
 .dsh-mobile-control__panel{box-sizing:border-box;width:min(380px,calc(100vw - 32px));max-height:calc(100vh - 140px);overflow-y:auto;padding:16px;border:1px solid var(--dsw-alias-border-subtle,#e1e5eb);border-radius:18px;background:var(--dsw-alias-bg-layer-2,#fff);box-shadow:0 18px 50px rgb(15 23 42 / 18%)}
-.dsh-mobile-control__header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}.dsh-mobile-control__panel h2{margin:0;font-size:17px;line-height:24px}.dsh-mobile-control__header-actions{display:flex;align-items:center;gap:2px}.dsh-mobile-control__diagnostic-entry,.dsh-mobile-control__close{display:inline-flex;align-items:center;justify-content:center;min-width:44px;height:44px;padding:0;border:0;border-radius:10px;background:transparent;color:inherit;cursor:pointer}.dsh-mobile-control__diagnostic-entry{padding:0 9px;color:#2563eb;font:650 12px/1 system-ui}.dsh-mobile-control__close{font-size:24px;line-height:1}.dsh-mobile-control__diagnostic-entry:hover,.dsh-mobile-control__close:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}
-.dsh-mobile-control__app-download{display:flex;align-items:center;justify-content:space-between;box-sizing:border-box;min-height:38px;margin:0 0 10px;padding:8px 11px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:11px;background:var(--dsw-alias-bg-layer-1,#f7f8fa);color:var(--dsw-alias-label-primary,#16181d);font:600 12px/1.3 system-ui;text-decoration:none}.dsh-mobile-control__app-download[hidden]{display:none}.dsh-mobile-control__app-download::after{color:#2563eb;font-size:14px;content:"↗"}.dsh-mobile-control__app-download:hover{border-color:#9fb9e8;background:#f5f8ff;color:#1d4ed8}
+.dsh-mobile-control__header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}.dsh-mobile-control__panel h2{margin:0;font-size:17px;line-height:24px}.dsh-mobile-control__header-actions{display:flex;align-items:center;gap:2px}.dsh-mobile-control__update-plugin,.dsh-mobile-control__diagnostic-entry,.dsh-mobile-control__close{display:inline-flex;align-items:center;justify-content:center;min-width:44px;height:44px;padding:0;border:0;border-radius:10px;background:transparent;color:inherit;cursor:pointer}.dsh-mobile-control__update-plugin,.dsh-mobile-control__diagnostic-entry{padding:0 8px;color:#2563eb;font:650 12px/1 system-ui;white-space:nowrap}.dsh-mobile-control__update-plugin[hidden]{display:none}.dsh-mobile-control__update-plugin:disabled{cursor:wait;opacity:.55}.dsh-mobile-control__close{font-size:24px;line-height:1}.dsh-mobile-control__update-plugin:hover:not(:disabled),.dsh-mobile-control__diagnostic-entry:hover,.dsh-mobile-control__close:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}
+.dsh-mobile-control__release-notice{margin:-2px 0 10px;padding:8px 10px;border-radius:9px;background:var(--dsw-alias-bg-layer-1,#eff6ff);color:var(--dsw-alias-label-primary,#1d4ed8);font-size:11px;line-height:1.45}.dsh-mobile-control__release-notice.is-error{color:#dc2626}.dsh-mobile-control__release-notice[hidden]{display:none}.dsh-mobile-control__app-download{display:flex;align-items:center;justify-content:space-between;box-sizing:border-box;min-height:38px;margin:0 0 10px;padding:8px 11px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:11px;background:var(--dsw-alias-bg-layer-1,#f7f8fa);color:var(--dsw-alias-label-primary,#16181d);font:600 12px/1.3 system-ui;text-decoration:none}.dsh-mobile-control__app-download[hidden]{display:none}.dsh-mobile-control__app-download::after{color:#2563eb;font-size:14px;content:"↗"}.dsh-mobile-control__app-download:hover{border-color:#9fb9e8;background:var(--dsw-alias-interactive-bg-hover-solid,var(--dsw-alias-bg-layer-2,#f5f8ff));color:var(--dsw-alias-label-primary,#1d4ed8)}
 .dsh-mobile-control__switcher{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;margin:0 0 14px;padding:4px;border-radius:12px;background:var(--dsw-alias-bg-layer-1,#f3f5f8)}.dsh-mobile-control__switcher[hidden]{display:none}.dsh-mobile-control__tab{min-height:36px;border:0;border-radius:9px;background:transparent;color:var(--dsw-alias-label-secondary,#606873);font:600 13px/1 system-ui;cursor:pointer}.dsh-mobile-control__tab.is-active{background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-label-primary,#16181d);box-shadow:0 1px 3px rgb(15 23 42 / 10%)}.dsh-mobile-control__view[hidden]{display:none}.dsh-mobile-control__intro{margin:0 0 12px;color:var(--dsw-alias-label-secondary,#606873);font-size:12px;line-height:1.55}.dsh-mobile-control__view.is-remote .dsh-mobile-control__actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.dsh-mobile-control__view.is-remote .dsh-mobile-control__actions button[hidden]{display:none}
-.dsh-mobile-control__provider-section{position:relative;margin:0 0 12px}.dsh-mobile-control__section-title{margin:0 0 8px;color:var(--dsw-alias-label-primary,#16181d);font:650 13px/1.4 system-ui}.dsh-mobile-control__provider-section>.dsh-mobile-control__section-title{padding-right:42px}.dsh-mobile-control__provider-choices{display:grid;gap:8px}.dsh-mobile-control__provider{display:flex;flex-direction:column;gap:5px;min-height:68px;padding:11px 12px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:13px;background:#fff;color:inherit;text-align:left;cursor:pointer;transition:border-color 160ms ease,background-color 160ms ease,box-shadow 160ms ease}.dsh-mobile-control__provider:hover{border-color:#9fb9e8;background:#f8fbff}.dsh-mobile-control__provider.is-selected{border-color:#2563eb;background:#f5f8ff;box-shadow:0 0 0 1px #2563eb inset}.dsh-mobile-control__provider:disabled{cursor:wait;opacity:.62}.dsh-mobile-control__provider-top{display:flex;align-items:center;justify-content:space-between;gap:8px}.dsh-mobile-control__provider-top strong{font-size:13px}.dsh-mobile-control__provider-badge{flex:none;padding:3px 7px;border-radius:999px;background:#e8f0ff;color:#1d4ed8;font:650 10px/1.2 system-ui}.dsh-mobile-control__provider-badge.is-cpolar{background:#eaf8f2;color:#087454}.dsh-mobile-control__provider-description{color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.45}.dsh-mobile-control__provider-info{position:absolute;z-index:5;top:-13px;right:-8px}.dsh-mobile-control__provider-info-button{display:flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:transparent;color:#475569;cursor:pointer;touch-action:manipulation}.dsh-mobile-control__provider-info-button:hover{background:#f1f5f9;color:#1d4ed8}.dsh-mobile-control__provider-info-glyph{display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:18px;height:18px;border:1.5px solid currentColor;border-radius:50%;font:700 12px/1 system-ui}.dsh-mobile-control__provider-info-popover{position:absolute;z-index:6;top:38px;right:4px;box-sizing:border-box;width:min(292px,calc(100vw - 72px));padding:10px 12px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:12px;background:var(--dsw-alias-bg-layer-2,#fff);box-shadow:0 10px 28px rgb(15 23 42 / 16%)}.dsh-mobile-control__provider-info-popover[hidden]{display:none}.dsh-mobile-control__provider-info-popover strong,.dsh-mobile-control__provider-info-popover span{display:block}.dsh-mobile-control__provider-info-popover strong{margin-bottom:3px;font-size:12px}.dsh-mobile-control__provider-info-popover span{color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.55}
-.dsh-mobile-control__cpolar-setup{margin:0 0 12px;padding:12px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:13px;background:#fff}.dsh-mobile-control__cpolar-setup[hidden],.dsh-mobile-control__cpolar-account[hidden],.dsh-mobile-control__details[hidden],.dsh-mobile-control__view.is-remote .dsh-mobile-control__actions[hidden],.dsh-mobile-control__danger[hidden]{display:none}.dsh-mobile-control__component-status,.dsh-mobile-control__component-note{margin:0 0 10px;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.55}.dsh-mobile-control__cpolar-setup>.dsh-mobile-control__primary{width:100%;min-height:44px;padding:9px 12px;border-radius:10px;font:600 12px/1.3 system-ui;cursor:pointer}.dsh-mobile-control__cpolar-account{margin-top:10px}.dsh-mobile-control__link-row{display:flex;flex-wrap:wrap;gap:6px 12px;margin:0 0 10px}.dsh-mobile-control__text-link{color:#2563eb;font-size:11px;text-decoration:none}.dsh-mobile-control__text-link:hover{text-decoration:underline}.dsh-mobile-control__token-label{display:flex;flex-direction:column;gap:5px;margin:0 0 8px;color:var(--dsw-alias-label-secondary,#606873);font-size:11px}.dsh-mobile-control__token{box-sizing:border-box;width:100%;min-height:44px;padding:9px 10px;border:1px solid var(--dsw-alias-border-normal,#cfd5dd);border-radius:10px;background:#fff;color:inherit;font:16px/1.4 system-ui}.dsh-mobile-control__cpolar-connect{display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:100%;min-height:44px;padding:10px 14px;border-radius:12px;font:650 13px/1.2 system-ui;cursor:pointer;transition:background-color 160ms ease,border-color 160ms ease,opacity 160ms ease}.dsh-mobile-control__cpolar-connect:hover:not(:disabled){border-color:#1d4ed8;background:#1d4ed8}.dsh-mobile-control__cpolar-connect:active:not(:disabled){border-color:#1e40af;background:#1e40af}.dsh-mobile-control__cpolar-connect:disabled{cursor:wait;opacity:.55}.dsh-mobile-control__details{margin:10px 0 0;border-top:1px solid var(--dsw-alias-border-subtle,#e1e5eb);padding-top:9px}.dsh-mobile-control__details>summary{min-height:30px;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:30px;cursor:pointer}.dsh-mobile-control__details-body{display:flex;flex-wrap:wrap;align-items:center;gap:7px 12px;padding:4px 0}.dsh-mobile-control__details-body p{flex:1 0 100%;margin:0;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.5}.dsh-mobile-control__storage{display:block;flex:1 0 100%;max-width:100%;overflow:hidden;padding:7px 8px;border-radius:8px;background:#f3f5f8;color:#475569;font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.dsh-mobile-control__danger{flex:1 0 100%;min-height:38px;margin-top:3px;padding:7px 10px;border:1px solid #dc2626;border-radius:9px;background:transparent;color:#b91c1c;font:12px/1.3 system-ui;cursor:pointer}
+.dsh-mobile-control__provider-section{position:relative;margin:0 0 14px}.dsh-mobile-control__section-title{margin:0 0 8px;color:var(--dsw-alias-label-primary,#16181d);font:650 13px/1.4 system-ui}.dsh-mobile-control__provider-section>.dsh-mobile-control__section-title{padding-right:42px}.dsh-mobile-control__provider-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.dsh-mobile-control__provider{display:flex;min-width:0;flex-direction:column;gap:6px;min-height:94px;padding:10px 11px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:13px;background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-label-primary,#16181d);text-align:left;cursor:pointer;touch-action:manipulation;transition:border-color 160ms ease,background-color 160ms ease,box-shadow 160ms ease}.dsh-mobile-control__provider:hover{border-color:#6f96db;background:var(--dsw-alias-interactive-bg-hover-solid,var(--dsw-alias-bg-layer-1,#f8fbff))}.dsh-mobile-control__provider.is-selected{border-color:#2563eb;background:var(--dsw-alias-interactive-bg-active,var(--dsw-alias-bg-layer-1,#f5f8ff));box-shadow:0 0 0 1px #2563eb inset}.dsh-mobile-control__provider:disabled{cursor:wait;opacity:.62}.dsh-mobile-control__provider-top{display:flex;min-width:0;align-items:flex-start;justify-content:space-between;gap:5px}.dsh-mobile-control__provider-top strong{min-width:0;font-size:12px;line-height:1.3}.dsh-mobile-control__provider-badge{flex:none;padding:2px 5px;border-radius:999px;background:#e8f0ff;color:#1d4ed8;font:650 9px/1.25 system-ui}.dsh-mobile-control__provider-badge.is-cpolar{background:#eaf8f2;color:#087454}.dsh-mobile-control__provider-description{color:var(--dsw-alias-label-secondary,#606873);font-size:10px;line-height:1.45}.dsh-mobile-control__provider-info{position:absolute;z-index:5;top:-13px;right:-8px}.dsh-mobile-control__provider-info-button{display:flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--dsw-alias-label-secondary,#475569);cursor:pointer;touch-action:manipulation}.dsh-mobile-control__provider-info-button:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f5f9);color:#2563eb}.dsh-mobile-control__provider-info-glyph{display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:18px;height:18px;border:1.5px solid currentColor;border-radius:50%;font:700 12px/1 system-ui}.dsh-mobile-control__provider-info-popover{position:absolute;z-index:6;top:38px;right:4px;box-sizing:border-box;width:min(292px,calc(100vw - 72px));padding:10px 12px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:12px;background:var(--dsw-alias-bg-layer-2,#fff);box-shadow:0 10px 28px rgb(15 23 42 / 16%)}.dsh-mobile-control__provider-info-popover[hidden]{display:none}.dsh-mobile-control__provider-info-popover strong,.dsh-mobile-control__provider-info-popover span{display:block}.dsh-mobile-control__provider-info-popover strong{margin-bottom:3px;font-size:12px}.dsh-mobile-control__provider-info-popover span{color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.55}
+.dsh-mobile-control__self-hosted{margin:8px 0 0;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:12px;background:var(--dsw-alias-bg-layer-1,#f8fafc)}.dsh-mobile-control__self-hosted-summary{display:flex;box-sizing:border-box;min-height:48px;align-items:center;justify-content:space-between;gap:10px;padding:8px 11px;cursor:pointer;list-style-position:inside}.dsh-mobile-control__self-hosted-summary>span:first-child{display:flex;min-width:0;flex-direction:column;gap:1px}.dsh-mobile-control__self-hosted-summary strong{font-size:11px}.dsh-mobile-control__self-hosted-summary span span{color:var(--dsw-alias-label-secondary,#606873);font-size:9px;line-height:1.35}.dsh-mobile-control__provider-badge.is-frp{background:#eef0f3;color:#475569}.dsh-mobile-control__self-hosted-body{padding:0 8px 8px}.dsh-mobile-control__provider.is-frp{width:100%;min-height:64px;background:var(--dsw-alias-bg-layer-2,#fff)}
+.dsh-mobile-control__cpolar-setup{margin:0 0 12px;padding:12px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:13px;background:var(--dsw-alias-bg-layer-2,#fff)}.dsh-mobile-control__cpolar-setup[hidden],.dsh-mobile-control__cpolar-account[hidden],.dsh-mobile-control__details[hidden],.dsh-mobile-control__view.is-remote .dsh-mobile-control__actions[hidden],.dsh-mobile-control__danger[hidden]{display:none}.dsh-mobile-control__component-status,.dsh-mobile-control__component-note{margin:0 0 10px;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.55}.dsh-mobile-control__cpolar-setup>.dsh-mobile-control__primary{width:100%;min-height:44px;padding:9px 12px;border-radius:10px;font:600 12px/1.3 system-ui;cursor:pointer}.dsh-mobile-control__cpolar-account{margin-top:10px}.dsh-mobile-control__link-row{display:flex;flex-wrap:wrap;gap:6px 12px;margin:0 0 10px}.dsh-mobile-control__text-link{color:#2563eb;font-size:11px;text-decoration:none}.dsh-mobile-control__text-link:hover{text-decoration:underline}.dsh-mobile-control__token-label{display:flex;flex-direction:column;gap:5px;margin:0 0 8px;color:var(--dsw-alias-label-secondary,#606873);font-size:11px}.dsh-mobile-control__token{box-sizing:border-box;width:100%;min-height:44px;padding:9px 10px;border:1px solid var(--dsw-alias-border-normal,#cfd5dd);border-radius:10px;background:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-layer-2,#fff));color:var(--dsw-alias-label-primary,#16181d);font:16px/1.4 system-ui}.dsh-mobile-control__cpolar-connect{display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:100%;min-height:44px;padding:10px 14px;border-radius:12px;font:650 13px/1.2 system-ui;cursor:pointer;transition:background-color 160ms ease,border-color 160ms ease,opacity 160ms ease}.dsh-mobile-control__cpolar-connect:hover:not(:disabled){border-color:#1d4ed8;background:#1d4ed8}.dsh-mobile-control__cpolar-connect:active:not(:disabled){border-color:#1e40af;background:#1e40af}.dsh-mobile-control__cpolar-connect:disabled{cursor:wait;opacity:.55}.dsh-mobile-control__details{margin:10px 0 0;border-top:1px solid var(--dsw-alias-border-subtle,#e1e5eb);padding-top:9px}.dsh-mobile-control__details>summary{min-height:30px;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:30px;cursor:pointer}.dsh-mobile-control__details-body{display:flex;flex-wrap:wrap;align-items:center;gap:7px 12px;padding:4px 0}.dsh-mobile-control__details-body p{flex:1 0 100%;margin:0;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.5}.dsh-mobile-control__storage{display:block;flex:1 0 100%;max-width:100%;overflow:hidden;padding:7px 8px;border-radius:8px;background:var(--dsw-alias-bg-layer-1,#f3f5f8);color:var(--dsw-alias-label-secondary,#475569);font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.dsh-mobile-control__danger{flex:1 0 100%;min-height:38px;margin-top:3px;padding:7px 10px;border:1px solid #dc2626;border-radius:9px;background:transparent;color:#dc2626;font:12px/1.3 system-ui;cursor:pointer}
+.dsh-mobile-control__frp-setup{margin:0;padding:12px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:13px;background:var(--dsw-alias-bg-layer-2,#fff)}.dsh-mobile-control__frp-setup[hidden]{display:none}.dsh-mobile-control__frp-step{padding:11px 0}.dsh-mobile-control__frp-step + .dsh-mobile-control__frp-step{border-top:1px solid var(--dsw-alias-border-subtle,#e1e5eb)}.dsh-mobile-control__frp-step>strong{display:block;margin-bottom:3px;font-size:12px;line-height:1.4}.dsh-mobile-control__frp-step>p{margin:0 0 9px;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.5}.dsh-mobile-control__frp-step>.dsh-mobile-control__frp-requirement{padding:8px 9px;border-radius:9px;background:var(--dsw-alias-bg-layer-1,#f3f5f8);color:var(--dsw-alias-label-primary,#384152);font-size:11px}.dsh-mobile-control__frp-fields{display:grid;grid-template-columns:minmax(0,1fr) 96px;gap:8px}.dsh-mobile-control__field{display:flex;min-width:0;flex-direction:column;gap:5px;color:var(--dsw-alias-label-secondary,#606873);font-size:11px}.dsh-mobile-control__field:nth-child(3),.dsh-mobile-control__field:nth-child(4){grid-column:1/-1}.dsh-mobile-control__field input{box-sizing:border-box;width:100%;min-height:44px;padding:9px 10px;border:1px solid var(--dsw-alias-border-normal,#cfd5dd);border-radius:10px;background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-label-primary,#16181d);font:16px/1.4 system-ui}.dsh-mobile-control__frp-action{box-sizing:border-box;width:100%;min-height:44px;padding:9px 12px;border-radius:10px;font:650 12px/1.3 system-ui;cursor:pointer}.dsh-mobile-control__frp-action:disabled{cursor:not-allowed;opacity:.5}.dsh-mobile-control__remote-workspace{margin:0;padding:12px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:15px;background:var(--dsw-alias-bg-layer-1,#f7f8fa)}.dsh-mobile-control__stage-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px}.dsh-mobile-control__stage-header .dsh-mobile-control__section-title{margin:0}.dsh-mobile-control__stage-meta{display:flex;min-width:0;align-items:center;justify-content:flex-end;gap:5px}.dsh-mobile-control__stage-value{max-width:115px;overflow:hidden;color:var(--dsw-alias-label-primary,#16181d);font:650 10px/1.3 system-ui;text-overflow:ellipsis;white-space:nowrap}.dsh-mobile-control__state-badge{flex:none;padding:3px 7px;border-radius:999px;background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-label-secondary,#606873);font:650 9px/1.25 system-ui}.dsh-mobile-control__state-badge.is-ready{background:#e6f7f0;color:#087454}.dsh-mobile-control__state-badge.is-busy{background:#e8f0ff;color:#1d4ed8}.dsh-mobile-control__state-badge.is-attention{background:#fff4dc;color:#935100}.dsh-mobile-control__remote-workspace>.dsh-mobile-control__status{box-sizing:border-box;margin:0 0 10px;padding:9px 10px;border-radius:10px;background:var(--dsw-alias-bg-layer-2,#fff);font-size:11px;line-height:1.45}.dsh-mobile-control__provider-setup-body{margin:0 0 10px}.dsh-mobile-control__provider-setup-body>.dsh-mobile-control__cpolar-setup{margin:0}.dsh-mobile-control__provider-setup-body>.dsh-mobile-control__cpolar-setup>.dsh-mobile-control__section-title,.dsh-mobile-control__provider-setup-body>.dsh-mobile-control__frp-setup>.dsh-mobile-control__section-title{display:none}.dsh-mobile-control__provider-setup-body>.dsh-mobile-control__details{margin:0;padding:9px 10px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:11px;background:var(--dsw-alias-bg-layer-2,#fff)}.dsh-mobile-control__remote-workspace>.dsh-mobile-control__actions{margin-top:2px}.dsh-mobile-control__remote-workspace>.dsh-mobile-control__qr{margin:10px 0 0}.dsh-mobile-control__remote-workspace>.dsh-mobile-control__manage-row{margin-top:10px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-subtle,#e1e5eb)}
 .dsh-mobile-control__access{display:flex;align-items:baseline;gap:6px;min-width:0;margin:0 0 12px}.dsh-mobile-control__access[hidden]{display:none}.dsh-mobile-control__access-label{flex:none;color:var(--dsw-alias-label-secondary,#606873);white-space:nowrap}.dsh-mobile-control__access-label::after{content:"："}.dsh-mobile-control__access-link{min-width:0;overflow:hidden;color:#2563eb;text-decoration:none;text-overflow:ellipsis;white-space:nowrap}.dsh-mobile-control__access-link:hover{text-decoration:underline}.dsh-mobile-control__qr{display:flex;justify-content:center;margin:0 0 12px}.dsh-mobile-control__qr[hidden]{display:none}.dsh-mobile-control__qr img{border-radius:12px;background:#fff;padding:8px}
 .dsh-mobile-control__status{margin:0 0 14px;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary,#606873)}.dsh-mobile-control__status::before{display:inline-block;width:8px;height:8px;margin-right:7px;border-radius:50%;background:#98a1ad;content:""}.dsh-mobile-control__status.is-running::before{background:#16a36a}.dsh-mobile-control__status.is-key{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;word-break:break-all}
-.dsh-mobile-control__guide{margin:0 0 14px;padding:12px;border:1px solid #bfdbfe;border-radius:12px;background:#eff6ff}.dsh-mobile-control__guide[hidden]{display:none}.dsh-mobile-control__guide-title{margin:0;color:#172554;font:650 13px/1.45 system-ui}.dsh-mobile-control__guide-summary,.dsh-mobile-control__guide-note{margin:4px 0 0;color:#475569;font-size:12px;line-height:1.5}.dsh-mobile-control__guide-steps{margin:8px 0 0;padding-left:20px;color:#1e293b;font-size:12px;line-height:1.6}.dsh-mobile-control__guide-note{color:#64748b}.dsh-mobile-control__guide-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.dsh-mobile-control__guide-actions button{min-width:0;min-height:44px;padding:8px;border-radius:10px;font:12px/1.25 system-ui;cursor:pointer}.dsh-mobile-control__guide-actions button:disabled{cursor:not-allowed;opacity:.45}
+.dsh-mobile-control__guide{margin:0 0 14px;padding:12px;border:1px solid #6f96db;border-radius:12px;background:var(--dsw-alias-bg-layer-1,#eff6ff)}.dsh-mobile-control__guide[hidden]{display:none}.dsh-mobile-control__guide-title{margin:0;color:var(--dsw-alias-label-primary,#172554);font:650 13px/1.45 system-ui}.dsh-mobile-control__guide-summary,.dsh-mobile-control__guide-note{margin:4px 0 0;color:var(--dsw-alias-label-secondary,#475569);font-size:12px;line-height:1.5}.dsh-mobile-control__guide-steps{margin:8px 0 0;padding-left:20px;color:var(--dsw-alias-label-primary,#1e293b);font-size:12px;line-height:1.6}.dsh-mobile-control__guide-note{color:var(--dsw-alias-label-secondary,#64748b)}.dsh-mobile-control__guide-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.dsh-mobile-control__guide-actions button{min-width:0;min-height:44px;padding:8px;border-radius:10px;font:12px/1.25 system-ui;cursor:pointer}.dsh-mobile-control__guide-actions button:disabled{cursor:not-allowed;opacity:.45}
 .dsh-mobile-control__extensions{margin:0 0 12px;color:var(--dsw-alias-label-secondary,#606873);font-size:12px}
 .dsh-mobile-control__view.is-diagnostics{--dsh-diagnostic-ok:#087454;--dsh-diagnostic-warning:#a35b00;--dsh-diagnostic-error:#c62828;--dsh-diagnostic-info:#526071}.dsh-mobile-control__diagnostic-summary{box-sizing:border-box;margin:0;padding:13px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:16px;background:var(--dsw-alias-bg-layer-1,#f8fafc)}.dsh-mobile-control__diagnostic-summary-main{display:grid;grid-template-columns:36px minmax(0,1fr);align-items:center;gap:11px}.dsh-mobile-control__diagnostic-summary-icon{position:relative;display:block;width:36px;height:36px;border-radius:50%;background:#e8edf3;color:var(--dsh-diagnostic-info)}.dsh-mobile-control__diagnostic-summary-icon::before,.dsh-mobile-control__diagnostic-summary-icon::after{position:absolute;content:""}.dsh-mobile-control__diagnostic-summary-body{display:flex;min-width:0;flex-direction:column;gap:2px}.dsh-mobile-control__diagnostic-summary-body strong{font-size:13px;line-height:1.35}.dsh-mobile-control__diagnostic-summary-body span{color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.5}.dsh-mobile-control__diagnostic-summary-meta{display:block;margin-top:11px;padding-top:9px;border-top:1px solid var(--dsw-alias-border-subtle,#dbe1e8);color:var(--dsw-alias-label-secondary,#606873);font-size:10px;line-height:1.45}.dsh-mobile-control__diagnostic-summary.is-ok .dsh-mobile-control__diagnostic-summary-icon{background:#e6f7f0;color:var(--dsh-diagnostic-ok)}.dsh-mobile-control__diagnostic-summary.is-ok .dsh-mobile-control__diagnostic-summary-icon::before{top:10px;left:10px;width:13px;height:7px;border-bottom:2px solid currentColor;border-left:2px solid currentColor;transform:rotate(-45deg)}.dsh-mobile-control__diagnostic-summary.is-attention .dsh-mobile-control__diagnostic-summary-icon{background:#fff4dc;color:var(--dsh-diagnostic-warning)}.dsh-mobile-control__diagnostic-summary.is-error .dsh-mobile-control__diagnostic-summary-icon{background:#fdecec;color:var(--dsh-diagnostic-error)}.dsh-mobile-control__diagnostic-summary.is-attention .dsh-mobile-control__diagnostic-summary-icon::before,.dsh-mobile-control__diagnostic-summary.is-error .dsh-mobile-control__diagnostic-summary-icon::before{top:8px;left:17px;width:2px;height:13px;border-radius:2px;background:currentColor}.dsh-mobile-control__diagnostic-summary.is-attention .dsh-mobile-control__diagnostic-summary-icon::after,.dsh-mobile-control__diagnostic-summary.is-error .dsh-mobile-control__diagnostic-summary-icon::after{bottom:8px;left:17px;width:2px;height:2px;border-radius:50%;background:currentColor}.dsh-mobile-control__diagnostic-summary.is-running .dsh-mobile-control__diagnostic-summary-icon{background:#e8f0ff;color:#2563eb}.dsh-mobile-control__diagnostic-summary.is-running .dsh-mobile-control__diagnostic-summary-icon::before{inset:9px;border:2px solid rgb(37 99 235 / 24%);border-top-color:currentColor;border-radius:50%;animation:dsh-diagnostic-spin .8s linear infinite}
 .dsh-mobile-control__diagnostic-summary.is-idle .dsh-mobile-control__diagnostic-summary-icon::before{top:8px;left:17px;width:2px;height:2px;border-radius:50%;background:currentColor}.dsh-mobile-control__diagnostic-summary.is-idle .dsh-mobile-control__diagnostic-summary-icon::after{top:13px;left:17px;width:2px;height:11px;border-radius:2px;background:currentColor}
@@ -1954,7 +2249,7 @@ const CONTROL_STYLES = `
 .dsh-mobile-control button:focus-visible,.dsh-mobile-control a:focus-visible,.dsh-mobile-control input:focus-visible,.dsh-mobile-control summary:focus-visible{outline:3px solid rgb(37 99 235 / 28%);outline-offset:2px}
 .dsh-mobile-control__trigger{box-sizing:border-box;display:flex;align-items:center;gap:8px;width:calc(100% + 8px);height:34px;margin:4px -4px;padding:6px 2px 6px 10px;border:0;border-radius:12px;background:transparent;color:var(--dsw-alias-label-primary,#16181d);font:14px/22px system-ui;cursor:pointer}.dsh-mobile-control__trigger:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}.dsh-mobile-control__trigger.is-rail{width:36px;height:36px;margin:8px 0 10px;padding:0;justify-content:center;border-radius:50%}.dsh-mobile-control__trigger-icon{position:relative;box-sizing:border-box;flex:none;width:14px;height:19px;border:1.7px solid currentColor;border-radius:3px}.dsh-mobile-control__trigger-icon::after{position:absolute;right:4px;bottom:2px;width:4px;height:1.5px;border-radius:2px;background:currentColor;content:""}.dsh-mobile-control__trigger-label{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .dsh-mobile-control__manage-row{display:flex;justify-content:space-between;gap:8px;margin-top:10px}.dsh-mobile-control__manage{flex:1 1 0;min-width:0;min-height:34px;padding:6px 8px;border:1px solid var(--dsw-alias-border-normal,#cfd5dd);border-radius:10px;background:transparent;color:inherit;font:12px/1.3 system-ui;cursor:pointer}.dsh-mobile-control__devices{margin-top:10px;border:1px solid var(--dsw-alias-border-subtle,#e1e5eb);border-radius:10px;padding:8px;max-height:220px;overflow-y:auto}.dsh-mobile-control__device-empty{color:var(--dsw-alias-label-secondary,#606873);font-size:12px;margin:0}.dsh-mobile-control__device{display:flex;align-items:center;gap:8px;padding:6px 2px}.dsh-mobile-control__device + .dsh-mobile-control__device{border-top:1px solid var(--dsw-alias-border-subtle,#e1e5eb)}.dsh-mobile-control__device-label{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.dsh-mobile-control__device-meta{flex:none;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;white-space:nowrap}.dsh-mobile-control__device-revoke{flex:none;min-height:28px;padding:4px 8px;border:1px solid #dc2626;border-radius:8px;background:transparent;color:#dc2626;font:12px/1.2 system-ui;cursor:pointer}
-@media (prefers-reduced-motion:reduce){.dsh-mobile-control__provider,.dsh-mobile-control__cpolar-connect{transition:none}.dsh-mobile-control__diagnostic-summary.is-running .dsh-mobile-control__diagnostic-summary-icon::before,.dsh-mobile-control__diagnostic-checks{animation:none}}
+@media (max-width:359px){.dsh-mobile-control__provider-choices{grid-template-columns:1fr}.dsh-mobile-control__provider{min-height:68px}}@media (prefers-reduced-motion:reduce){.dsh-mobile-control__provider,.dsh-mobile-control__cpolar-connect{transition:none}.dsh-mobile-control__diagnostic-summary.is-running .dsh-mobile-control__diagnostic-summary-icon::before,.dsh-mobile-control__diagnostic-checks{animation:none}}
 `
 
 /** Mount the desktop control or mobile feature enhancements. */

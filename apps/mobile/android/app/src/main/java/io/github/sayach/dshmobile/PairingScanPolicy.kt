@@ -6,16 +6,18 @@ internal data class PairingScanTarget(
     val mode: AccessMode,
 )
 
-/** Parses pairing QR contents without depending on the screen that opened the scanner. */
+/** Parses pairing QR contents while using the active flow for user-owned remote domains. */
 internal object PairingScanPolicy {
-    fun parse(rawValue: String): PairingScanTarget? {
+    fun parse(rawValue: String, preferredMode: AccessMode? = null): PairingScanTarget? {
         val normalized = rawValue.trim()
         if (GatewayUrlPolicy.pairingKey(normalized) == null) return null
         val connection = GatewayConnection.parse(normalized) ?: return null
-        val mode = if (RemoteHostPolicy.isSupported(connection.origin.host)) {
-            AccessMode.REMOTE
-        } else {
-            AccessMode.LAN
+        val host = connection.origin.host
+        val mode = when {
+            RemoteHostPolicy.isSupported(host) -> AccessMode.REMOTE
+            preferredMode == AccessMode.REMOTE && RemoteHostPolicy.isRemoteCandidate(host) -> AccessMode.REMOTE
+            preferredMode != AccessMode.REMOTE && !RemoteHostPolicy.isRemoteCandidate(host) -> AccessMode.LAN
+            else -> return null
         }
         return PairingScanTarget(connection, mode)
     }

@@ -4,6 +4,9 @@ import {
   bindClientResponseLifetime,
   combineClientSignalLifetime,
   combineClientSignals,
+  CONTROL_STYLES,
+  createFrpServerTemplateForClipboard,
+  clientReleaseInfo,
   diagnosticEntriesForRender,
   diagnosticOverallForChecks,
   diagnosticServerCopy,
@@ -44,6 +47,51 @@ afterEach(() => {
 })
 
 describe('mobile-control localization', () => {
+  it('uses DSH theme layers for remote cards while preserving a scannable QR background', () => {
+    expect(CONTROL_STYLES).toContain('dsh-mobile-control__provider{')
+    expect(CONTROL_STYLES).toContain('background:var(--dsw-alias-bg-layer-2,#fff)')
+    expect(CONTROL_STYLES).toContain('background:var(--dsw-alias-interactive-bg-active')
+    expect(CONTROL_STYLES).toContain('dsh-mobile-control__cpolar-setup')
+    expect(CONTROL_STYLES).toContain('dsh-mobile-control__token')
+    expect(CONTROL_STYLES).toContain('grid-template-columns:repeat(2,minmax(0,1fr))')
+    expect(CONTROL_STYLES).toContain('dsh-mobile-control__remote-workspace')
+    expect(CONTROL_STYLES).toContain('dsh-mobile-control__stage-value')
+    expect(CONTROL_STYLES).toContain('dsh-mobile-control__state-badge')
+    expect(CONTROL_STYLES).toContain('dsh-mobile-control__qr img{border-radius:12px;background:#fff')
+  })
+
+  it('renders only validated release versions and the official Android download', () => {
+    expect(clientReleaseInfo({
+      updateAvailable: true,
+      latestVersion: '0.4.1',
+      androidVersion: '0.4.1',
+      androidDownloadUrl: 'https://github.com/saya-ch/dsh-mobile/releases/download/v0.4.1/dsh-mobile-android-v0.4.1.apk',
+    })).toEqual({
+      updateAvailable: true,
+      latestVersion: '0.4.1',
+      androidVersion: '0.4.1',
+      androidDownloadUrl: 'https://github.com/saya-ch/dsh-mobile/releases/download/v0.4.1/dsh-mobile-android-v0.4.1.apk',
+    })
+    expect(clientReleaseInfo({
+      updateAvailable: true,
+      latestVersion: '<script>',
+      androidVersion: 'latest',
+      androidDownloadUrl: 'https://example.com/app.apk',
+    })).toEqual({
+      updateAvailable: false,
+      androidDownloadUrl: 'https://github.com/saya-ch/dsh-mobile/releases',
+    })
+    expect(clientReleaseInfo({
+      updateAvailable: false,
+      androidVersion: '0.4.1',
+      androidDownloadUrl: 'https://example.com/dsh-mobile.apk',
+    })).toEqual({
+      updateAvailable: false,
+      androidVersion: '0.4.1',
+      androidDownloadUrl: 'https://github.com/saya-ch/dsh-mobile/releases',
+    })
+  })
+
   it('follows the DSH document language before the browser fallback', () => {
     expect(selectMobileControlLocale('it-IT', ['en-US'])).toBe('it')
     expect(selectMobileControlLocale('', ['zh-Hant', 'en-US'])).toBe('zh')
@@ -67,6 +115,18 @@ describe('mobile-control localization', () => {
     const englishReasons = Object.keys(DIAGNOSTIC_REASON_MESSAGES.en).sort()
     expect(Object.keys(DIAGNOSTIC_REASON_MESSAGES.it).sort()).toEqual(englishReasons)
     expect(Object.keys(DIAGNOSTIC_REASON_MESSAGES.zh).sort()).toEqual(englishReasons)
+  })
+
+  it('creates the restricted FRP VPS template entirely in the loopback client', () => {
+    const template = createFrpServerTemplateForClipboard(
+      7000,
+      '0123456789abcdef0123456789abcdef',
+      'https://dsh.example.com',
+    )
+    expect(template).toContain('proxyBindAddr = "127.0.0.1"')
+    expect(template).toContain('reverse_proxy 127.0.0.1:7080')
+    expect(() => createFrpServerTemplateForClipboard(7000, 'short', 'https://dsh.example.com')).toThrow()
+    expect(() => createFrpServerTemplateForClipboard(7000, '0'.repeat(32), 'http://dsh.example.com')).toThrow()
   })
 
   it('remounts plugin-owned UI only when the DSH document language changes', () => {

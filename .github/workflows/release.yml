@@ -28,19 +28,25 @@ jobs:
         with:
           node-version: 24.x
           cache: npm
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: 1.26.6
           cache-dependency-path: native/funnel-host/go.sum
       - run: npm ci
+      - name: Test Funnel host
+        run: |
+          go test ./...
+          go vet ./...
+        working-directory: native/funnel-host
       - run: npm run build:funnel-host
+      - run: npm run check:funnel-licenses:full
       - run: npm run verify
       - name: Pack plugin and release metadata
         run: |
           npm pack
           sha256sum dsh-mobile-*.tgz > dsh-mobile-plugin.sha256
           npm sbom --sbom-format cyclonedx > dsh-mobile-npm-sbom.cdx.json
-          (cd native/funnel-host && go list -m all) > dsh-mobile-funnel-go-modules.txt
+          go version -m bin/dsh-mobile-funnel-win32-x64.exe > dsh-mobile-funnel-go-modules.txt
       - uses: actions/upload-artifact@v7
         with:
           name: plugin-package
@@ -57,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 17
@@ -87,11 +93,22 @@ jobs:
           DSH_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: bash ./gradlew --no-daemon lintDebug testDebugUnitTest assembleRelease -x lintAnalyzeDebugUnitTest -x lintAnalyzeDebugAndroidTest
         working-directory: apps/mobile/android
+      - name: Record Android runtime dependencies
+        run: bash ./gradlew --no-daemon :app:dependencies --configuration releaseRuntimeClasspath > "$GITHUB_WORKSPACE/dsh-mobile-android-${GITHUB_REF_NAME}-dependencies.txt"
+        working-directory: apps/mobile/android
       - name: Verify Android signature
         run: |
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -x "$apksigner"
-          "$apksigner" verify --verbose apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          apk="apps/mobile/android/app/build/outputs/apk/release/app-release.apk"
+          report="$RUNNER_TEMP/dsh-mobile-apksigner.txt"
+          "$apksigner" verify --verbose --print-certs "$apk" | tee "$report"
+          mapfile -t signer_digests < <(awk '/^Signer #[0-9]+ certificate SHA-256 digest:/ { print tolower($NF) }' "$report")
+          expected="f46bbee7dbe47d18f49f95f940e1d368f0b79bd8ad9d15d488337fba51e92e87"
+          if [ "${#signer_digests[@]}" -ne 1 ] || [ "${signer_digests[0]:-}" != "$expected" ]; then
+            echo "Android APK must have exactly one signer with the established release certificate." >&2
+            exit 1
+          fi
       - name: Enforce Android package size
         run: |
           apk="apps/mobile/android/app/build/outputs/apk/release/app-release.apk"
@@ -111,6 +128,7 @@ jobs:
           path: |
             dsh-mobile-android-${{ github.ref_name }}.apk
             dsh-mobile-android-${{ github.ref_name }}.apk.sha256
+            dsh-mobile-android-${{ github.ref_name }}-dependencies.txt
           if-no-files-found: error
 
   publish:
@@ -142,7 +160,7 @@ jobs:
             exit 0
           fi
           if [ -n "$NODE_AUTH_TOKEN" ]; then
-            npm publish "$package" --access public
+            npm publish "$package" --provenance --access public
           else
             npm publish "$package" --provenance --access public
           fi

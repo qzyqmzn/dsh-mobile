@@ -17,15 +17,19 @@
 
 <p align="center"><a href="README.md">简体中文</a> · <a href="CHANGELOG.md">Changelog</a></p>
 
-> DSH Mobile 0.3.2 is a DeepSeek Harness community plugin; the native app supports Android only.
+> DSH Mobile is a DeepSeek Harness community plugin; the native app supports Android only.
+>
+> **0.3.3 update**: add an advanced self-hosted FRP channel, a one-click plugin update entry, and version-aware Android downloads; reorganize remote setup, fix settings occasionally reverting to desktop layout and dark-mode contrast, and strengthen remote-process cleanup, Android authentication, and download validation.
 >
 > **0.3.2 update**: image selection and full-resolution capture move into the composer plus menu with file, size, concurrency, and interaction deadlines; extension and `/mobile` edits notify authenticated phones immediately while Host code, scripts, styles, and assets switch as one generation and retain a usable version on failure; scoped request paths and response limits are tightened, Android Bridge temporary files and grants are fully released, Funnel now follows the DSH lifecycle, native app screens follow the system Chinese/English/Italian locale, and plugin-owned UI follows DSH's locale.
 >
-> **With DeepSeek Harness 0.1.2-alpha.1, update both the plugin and app to 0.3.2**; older apps use a status-bar strategy that does not fit the new Web UI, and app 0.1.3 or earlier also requires reinstalling and pairing again.
+> **With DeepSeek Harness 0.1.2-alpha.1, update both the plugin and app to 0.3.2 or later**; older apps use a status-bar strategy that does not fit the new Web UI, and app 0.1.3 or earlier also requires reinstalling and pairing again.
+>
+> The plugin is evolving rapidly; keep the plugin and app updated together. Self-hosted FRP requires an existing VPS, a domain, and Android app 0.3.3 or later.
 
-<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.2/dsh-mobile-android-v0.3.2.apk"><strong>Download Android app 0.3.2</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.2">Release notes and checksums</a></p>
+<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.3/dsh-mobile-android-v0.3.3.apk"><strong>Download Android app 0.3.3</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.3">Release notes and checksums</a></p>
 
-DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN or an optional Tailscale Funnel or cpolar remote path. Local and remote access keep the same sessions, Workspaces, messages, and tools while using separate switches and paired-device stores without modifying DeepSeek Harness source.
+DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN or an optional Tailscale Funnel, cpolar, or self-hosted FRP remote path. Local and remote access keep the same sessions, Workspaces, messages, and tools while using separate switches and paired-device stores without modifying DeepSeek Harness source.
 
 Mobile access runs on its own HTTPS origin with pinned certificates; only paired devices pass validation.
 
@@ -84,7 +88,7 @@ LAN and remote access are independent connections. Prefer LAN while the phone is
 Use this when the phone and computer share Wi-Fi, Ethernet, or a phone hotspot. It is the default and simplest path.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/lan-access.png" width="82%" alt="DSH Mobile LAN access, pairing QR code, and device management">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/lan-access-en.png" width="82%" alt="DSH Mobile LAN access, pairing QR code, and device management">
 </p>
 
 1. Connect the phone and computer to the same local network, then open **Mobile Access → Local network** in the lower-left corner of DeepSeek Harness.
@@ -96,24 +100,27 @@ The app is optional: select **Copy pairing link** and open it in a mobile browse
 
 ### Remote access
 
-Use this after the phone leaves the computer's network. Remote access is disabled by default, and the phone needs neither the Tailscale nor cpolar app.
+Use this after the phone leaves the computer's network. Remote access is disabled by default, and the phone needs no separate Tailscale, cpolar, or FRP app.
 
 Remote providers may impose bandwidth and connection limits: the [cpolar Free plan](https://svip.cpolar.com/pricing) currently lists 1 Mbps, while [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel#requirements-and-limitations) has non-configurable bandwidth limits. DSH Mobile reduces transfer and waiting with 10-message pages, load-on-scroll history, gzip, and a persistent WebSocket, but it cannot raise provider quotas.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/remote-access.png" width="82%" alt="DSH Mobile remote access and provider selection">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/remote-access-en.png" width="82%" alt="DSH Mobile remote access and provider selection">
 </p>
 
 1. Open **Mobile Access → Remote** in the lower-left corner of DeepSeek Harness and choose a provider:
    - **Tailscale Funnel**: select **Enable remote access**, complete the one-time Tailscale sign-in on the official page, follow the panel prompt to allow Funnel, then return to DSH and wait until the connection is ready.
    - **cpolar**: select **Install official component**, sign in to the cpolar dashboard and obtain an Authtoken, paste it, then select **Save and connect**. The component is downloaded into the plugin's private directory only after confirmation.
+   - **Self-hosted FRP (advanced)**: expand **Self-hosted connection**, enter the VPS, frps port, shared token, and your HTTPS domain; apply the generated restricted frps + Caddy template on the VPS, then install the official `frpc` on demand and verify the path. This requires Android app 0.3.3 or later.
 2. When the panel reports that remote access is ready, select **Create remote pairing QR code**.
 3. In the Android app, open **Remote access** and scan the QR code to create its separate pairing.
 4. The app keeps device trust and reconnects automatically. Disable remote access when it is not needed; LAN access remains unchanged.
 
-Tailscale Funnel has broad reach but may be unreliable from mainland China. Its runtime ties the public listener to the parent process and a bounded control channel; parent exit, channel closure, or an explicit stop ends the current generation and cleans up its resources. cpolar is better suited to mainland networks. The plugin validates the pinned component download, stores its configuration and program entirely under `$DSH_HOME/mobile-access/`, and can remove them completely from the panel.
+Tailscale Funnel has broad reach but may be unreliable from mainland China. Its runtime ties the public listener to the parent process and a bounded control channel; parent exit, channel closure, or an explicit stop ends the current generation and cleans up its resources. cpolar is better suited to mainland networks, while self-hosted FRP fits users who already have a VPS and domain and want to avoid public-provider bandwidth quotas. The plugin validates pinned on-demand components, stores their configuration and programs entirely under `$DSH_HOME/mobile-access/`, and can remove them completely from the panel.
 
-The public remote origin still requires DSH device pairing. Managed remote components currently support Windows x64.
+Self-hosted FRP generates only one HTTP vhost to the DSH loopback gateway. It exposes no arbitrary FRP configuration, TCP/UDP proxy, or FRP plugin. The VPS plaintext vhost must bind to `127.0.0.1`, with Caddy providing public HTTPS; the plugin rejects a publicly reachable plaintext port and reports readiness only after public discovery identifies the current computer.
+
+The public remote origin still requires DSH device pairing. The bundled Funnel and managed cpolar components currently support Windows x64; on-demand FRP 0.70.1 supports Windows, Linux, and macOS on x64 and arm64.
 
 ## Extend and customize
 
@@ -173,6 +180,7 @@ Three layers: the Host face for discovery, pairing, HTTPS, loopback proxying, an
 - Use the LAN listener only on a trusted home, office, or hotspot network; do not add your own port forwarding.
 - A remote origin is publicly reachable, but unpaired requests cannot enter DSH; turn the remote switch off when it is not needed.
 - cpolar downloads a pinned official build only after confirmation and verifies its size and SHA-256. It installs no system service, PATH entry, or startup task, and plugin cleanup removes its managed files.
+- Self-hosted FRP downloads pinned official `frpc` only after confirmation and verifies the origin, exact size, SHA-256, archive paths, and executable version. The shared token never appears in status, diagnostics, or logs. Copying the server template places it on the system clipboard, so clear the clipboard after use; cleanup removes only plugin-managed local files and does not change the VPS.
 - A paired device is a fully trusted DeepSeek Harness operator and can run tools on the computer; revoke lost devices from the computer.
 - The LAN gateway listens only while Mobile Access is enabled; with it off, DSH keeps running normally on the computer.
 
@@ -182,6 +190,7 @@ See [SECURITY.md](SECURITY.md).
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
+| `0.3.3` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.3.2` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.3.1` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.3.0` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |

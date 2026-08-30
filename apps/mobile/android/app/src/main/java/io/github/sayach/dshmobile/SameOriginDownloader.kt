@@ -20,6 +20,7 @@ internal object SameOriginDownloader {
         cookieHeader: String?,
         caCertificate: ByteArray?,
         output: OutputStream,
+        maxBytes: Long = MAX_DOWNLOAD_BYTES,
     ) {
         var current = initialUrl
         repeat(MAX_REDIRECTS + 1) { redirectCount ->
@@ -47,7 +48,8 @@ internal object SameOriginDownloader {
                     return@repeat
                 }
                 if (status !in 200..299) throw IOException("Download returned HTTP $status")
-                connection.inputStream.use { input -> input.copyTo(output, DEFAULT_BUFFER_SIZE) }
+                if (connection.contentLengthLong > maxBytes) throw IOException("Download exceeds the mobile size limit")
+                connection.inputStream.use { input -> copyDownloadAtMost(input, output, maxBytes) }
                 return
             } finally {
                 connection.disconnect()

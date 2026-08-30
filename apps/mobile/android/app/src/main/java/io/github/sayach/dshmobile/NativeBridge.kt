@@ -385,7 +385,7 @@ internal class NativeBridge(
                         activity.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
                             type = "text/plain"
                             putExtra(Intent.EXTRA_TEXT, input.optString("text", ""))
-                        }, "Share"))
+                        }, activity.getString(R.string.share)))
                         finishPending(requestId, successJson(requestId, JSONObject().put("ok", true)))
                     } catch (_: Exception) {
                         finishPending(requestId, errorJson("failed", "native operation failed", requestId))
@@ -676,7 +676,7 @@ internal class NativeBridge(
             type = if (mimeTypes.size == 1) mimeTypes.single() else "*/*"
             if (mimeTypes.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.toTypedArray())
         }
-        activity.startActivityForResult(Intent.createChooser(intent, "Choose file"), FILE_REQUEST)
+        activity.startActivityForResult(Intent.createChooser(intent, activity.getString(R.string.choose_file)), FILE_REQUEST)
     }
 
     private fun startCamera() {
@@ -703,7 +703,7 @@ internal class NativeBridge(
             clipData = ClipData.newRawUri("camera output", outputUri)
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        val chooser = Intent.createChooser(intent, "Take photo").apply {
+        val chooser = Intent.createChooser(intent, activity.getString(R.string.take_photo)).apply {
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         activity.startActivityForResult(chooser, CAMERA_REQUEST)

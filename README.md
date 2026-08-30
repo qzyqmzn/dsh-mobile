@@ -24,15 +24,19 @@
   <a href="README.en.md">English</a>
 </p>
 
-> DSH Mobile 0.3.2 是 DeepSeek Harness 社区插件，原生 App 仅支持 Android。
+> DSH Mobile 是 DeepSeek Harness 社区插件，原生 App 仅支持 Android。
+>
+> **0.3.3 更新**：新增自建 FRP 高级远程通道和插件一键更新入口，App 下载显示最新版本；重新整理远程连接页，修复设置弹窗偶发桌面布局与深色模式对比度，并完善远程进程清理、Android 认证和下载校验。
 >
 > **0.3.2 更新**：新增输入栏加号菜单中的图片选择与原图拍照，并限制文件类型、大小、并发和交互超时；扩展及 `/mobile` 修改会主动通知已认证手机刷新，Host、脚本、样式和资源按同一代次原子切换，失败时保留可用版本；同时收紧扩展请求路径与响应限制，完整清理 Android Bridge 的临时文件和授权，修正 Funnel 随 DSH 启停的生命周期，并让 App 原生页面跟随系统中/英/意语言、插件界面跟随 DSH 语言。
 >
-> **使用 DeepSeek Harness 0.1.2-alpha.1 时，请将插件与 App 同步升级至 0.3.2**；旧 App 的状态栏策略不适配新版 Web，0.1.3 及更早版本还需卸载重装并重新配对。
+> **使用 DeepSeek Harness 0.1.2-alpha.1 时，请将插件与 App 同步升级至 0.3.2 或更高版本**；旧 App 的状态栏策略不适配新版 Web，0.1.3 及更早版本还需卸载重装并重新配对。
+>
+> 插件仍在快速迭代，建议将插件与 App 同步更新。自建 FRP 需要已有 VPS、域名及 Android App 0.3.3 或更高版本。
 
-<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.2/dsh-mobile-android-v0.3.2.apk"><strong>下载 Android App 0.3.2</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.2">版本说明与校验文件</a></p>
+<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.3/dsh-mobile-android-v0.3.3.apk"><strong>下载 Android App 0.3.3</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.3">版本说明与校验文件</a></p>
 
-DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 通过局域网，或可选的 Tailscale Funnel、cpolar 远程通道连接电脑，继续使用同一份会话、工作区、消息和工具。局域网与远程访问分别启停、分别管理设备，且都不修改 DeepSeek Harness 源码。
+DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 通过局域网，或可选的 Tailscale Funnel、cpolar、自建 FRP 远程通道连接电脑，继续使用同一份会话、工作区、消息和工具。局域网与远程访问分别启停、分别管理设备，且都不修改 DeepSeek Harness 源码。
 
 移动访问使用独立的 HTTPS 与证书固定，只有配对过的设备能通过校验接入。
 
@@ -103,7 +107,7 @@ dsh plugin --profile web add dshmarket
 
 ### 远程访问
 
-适合手机离开电脑所在网络后使用。远程访问默认关闭，手机不需要另外安装 Tailscale 或 cpolar。
+适合手机离开电脑所在网络后使用。远程访问默认关闭，手机不需要另外安装 Tailscale、cpolar 或 FRP。
 
 远程服务可能受带宽和连接限额影响：[cpolar 免费方案](https://svip.cpolar.com/pricing) 当前为 1 Mbps，[Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel#requirements-and-limitations) 也存在不可配置的带宽限制。DSH Mobile 通过 10 条分页、顶部按需加载、gzip 和 WebSocket 长连接减少流量与等待，但无法突破服务商限额。
 
@@ -114,13 +118,16 @@ dsh plugin --profile web add dshmarket
 1. 在 DeepSeek Harness 左下角打开 **移动访问 → 远程**，选择一种连接方式：
    - **Tailscale Funnel**：点击 **启用远程访问**，在打开的官方页面完成一次 Tailscale 登录；按面板提示继续允许 Funnel，然后返回 DSH 等待连接就绪。
    - **cpolar**：点击 **安装官方组件**，登录 cpolar 控制台取得 Authtoken，粘贴后点击 **保存并连接**。组件只会在确认后下载到插件私有目录。
+   - **自建 FRP（高级）**：展开 **自建连接**，填写 VPS、frps 端口、共享 Token 和自己的 HTTPS 域名；复制插件生成的受限 frps + Caddy 模板到 VPS，再按提示安装官方 `frpc` 并验证连接。需要 Android App 0.3.3 或更高版本。
 2. 状态变为“远程访问已就绪”后，点击 **生成远程配对二维码**。
 3. 在 Android App 中进入 **远程访问**，扫描二维码完成独立配对。
 4. 此后 App 会保存设备信任并自动重连；不使用时可以关闭远程访问，局域网连接不会受影响。
 
-Tailscale Funnel 覆盖范围广，但在中国大陆网络下可能不稳定。其运行组件把公开监听生命周期绑定到父进程和受限控制通道；父进程退出、控制通道关闭或显式停止时会结束当前代次并清理资源。cpolar 更适合国内网络；插件会校验下载组件的固定版本，配置与程序均保存在 `$DSH_HOME/mobile-access/`，可随时在面板中彻底清除。
+Tailscale Funnel 覆盖范围广，但在中国大陆网络下可能不稳定。其运行组件把公开监听生命周期绑定到父进程和受限控制通道；父进程退出、控制通道关闭或显式停止时会结束当前代次并清理资源。cpolar 更适合国内网络；自建 FRP 适合已有 VPS 和域名、希望避开公共服务带宽限制的用户。插件会校验按需下载的固定版本组件，配置与程序均保存在 `$DSH_HOME/mobile-access/`，可随时在面板中彻底清除。
 
-远程公开地址仍受 DSH 设备配对保护。当前托管的远程组件支持 Windows x64。
+自建 FRP 只生成一个指向 DSH 回环网关的 HTTP vhost，不提供任意 FRP 配置、TCP/UDP 代理或 FRP 插件。VPS 的明文 vhost 必须只监听 `127.0.0.1`，由 Caddy 提供公网 HTTPS；插件会拒绝可从公网访问的明文端口，并在公开发现接口确认连接到当前电脑后才显示“已就绪”。
+
+远程公开地址仍受 DSH 设备配对保护。内置 Funnel 与托管 cpolar 当前支持 Windows x64；按需安装的 FRP 0.70.1 支持 Windows、Linux、macOS 的 x64 与 arm64。
 
 ## 扩展与自定义
 
@@ -182,6 +189,7 @@ flowchart LR
 - 局域网监听只用于可信家庭、办公网络或可信热点；不要自行做端口转发。
 - 远程地址可从公网到达，但未配对请求无法进入 DSH；不使用时应关闭远程开关。
 - cpolar 仅在用户确认后下载固定官方版本并校验大小和 SHA-256；不会安装系统服务、写入 PATH 或设置开机启动，插件清理会删除其托管文件。
+- 自建 FRP 仅在用户确认后从官方 Release 下载固定版本 `frpc`，校验来源、精确大小、SHA-256、压缩包路径和可执行文件版本；共享 Token 不会出现在状态、诊断或日志中。复制服务器模板时 Token 会进入系统剪贴板，请粘贴后及时清除；清理只删除插件管理的本机文件，不会修改 VPS。
 - 配对设备拥有控制电脑端 DeepSeek Harness 的能力，应视为完全可信设备；丢失手机后应在电脑端撤销设备。
 - 移动网关开启时才监听局域网；关闭后 DeepSeek Harness 仍正常在电脑本机运行。
 
@@ -192,6 +200,7 @@ flowchart LR
 
 | DSH Mobile | 已验证的 DeepSeek Harness                                               |
 | ------------ | ------------------------------------------------------------------------- |
+| `0.3.3` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1` |
 | `0.3.2`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1` |
 | `0.3.1`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1` |
 | `0.3.0`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1` |
