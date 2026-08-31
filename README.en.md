@@ -21,7 +21,7 @@
 >
 > **0.3.x updates**: connection diagnostics, image attachments, self-hosted FRP, and plugin updates; improved reconnection, mobile layouts, localization, extension hot reload, and compatibility with DSH Desktop and usage plugins. [Details and acknowledgements](CHANGELOG.md).
 >
-> **Upgrade reminder**: the plugin is evolving rapidly; keep it and the app updated together. With DSH 0.1.2-alpha.1, update both to 0.3.2 or later. [Compatibility notes](#compatibility).
+> **Upgrade reminder**: the plugin is evolving rapidly; keep it and the app updated together. DSH 0.1.2-alpha.2 requires Mobile plugin 0.3.4 or later. [Compatibility notes](#compatibility).
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.4/dsh-mobile-android-v0.3.4.apk"><strong>Download Android app 0.3.4</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.4">Release notes and checksums</a></p>
 
@@ -186,11 +186,11 @@ See [SECURITY.md](SECURITY.md).
 
 ## Compatibility
 
-Plugin 0.3.4 remains compatible with existing 0.3.3 apps without re-pairing. Older apps use a status-bar strategy that does not fit the new Web UI; follow the upgrade guidance above. App 0.1.3 or earlier requires reinstalling and pairing again.
+Use Mobile plugin 0.3.4 with DSH 0.1.2-alpha.2; plugin and app 0.3.2 or later are recommended for DSH 0.1.2-alpha.1. Plugin 0.3.4 remains compatible with existing 0.3.3 apps without re-pairing. Earlier apps use a different status-bar strategy, so updating both is recommended. App 0.1.3 or earlier requires reinstalling and pairing again.
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
-| `0.3.4` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
+| `0.3.4` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1`, `0.1.2-alpha.2` |
 | `0.3.3` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.3.2` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.3.1` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |

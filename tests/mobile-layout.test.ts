@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { runInNewContext } from 'node:vm'
+import { describe, expect, it, vi } from 'vitest'
 import { rewriteMobileIndex } from '../src/gateway.js'
+import { CSRF_COOKIE, CSRF_HEADER } from '../src/http-security.js'
 import { MOBILE_LAYOUT_MESSAGES, MOBILE_LAYOUT_STYLES, resolveMobileLayoutLanguage } from '../src/mobile-layout.js'
 
 function index(entries: unknown[]): string {
@@ -9,6 +11,83 @@ function index(entries: unknown[]): string {
 
 function currentIndex(entries: unknown[]): string {
   return `<!doctype html><html><head><script>globalThis["__DSH_BOOT__"] = ${JSON.stringify({ rev: 'stock', entries })};</script></head><body></body></html>`
+}
+
+interface BootEntry {
+  id: string
+  url: string
+  rev: string
+  inject?: string[]
+  immediately?: boolean
+}
+
+const connectionModule = '@deepseek-ai/dsh-client-connection'
+const rendererModule = '@deepseek-ai/dsh-client-ui-renderer'
+const gatewayModule = '@deepseek-ai/dsh-api-gateway'
+const remotesModule = '@deepseek-ai/dsh-api-remotes'
+const settingsModule = '@deepseek-ai/dsh-client-ui-settings'
+
+function remoteSettingsEntries(): BootEntry[] {
+  const entry = (id: string, inject: string[] = []): BootEntry => ({ id, url: `/plugins/${id}.js`, rev: 'stock', inject })
+  return [
+    entry(connectionModule),
+    entry(rendererModule),
+    entry('@deepseek-ai/dsh-typert-registry'),
+    entry(gatewayModule, ['@deepseek-ai/dsh-typert-registry', connectionModule]),
+    entry(remotesModule, [gatewayModule]),
+    entry(settingsModule, [remotesModule]),
+    entry('@deepseek-ai/dsh-client-locale', [settingsModule]),
+    entry('@deepseek-ai/dsh-client-ui-session', [remotesModule]),
+    entry('@deepseek-ai/dsh-client-ui-theme', [settingsModule]),
+    entry('@deepseek-ai/dsh-client-ui-layout', [
+      '@deepseek-ai/dsh-client-locale', rendererModule,
+      '@deepseek-ai/dsh-client-ui-session', '@deepseek-ai/dsh-client-ui-theme',
+    ]),
+    entry('@deepseek-ai/dsh-client-ui-sidebar', [settingsModule]),
+    { ...entry('dsh-mobile', [connectionModule, '@deepseek-ai/dsh-client-ui-sidebar']), immediately: true },
+  ]
+}
+
+function bootEntries(html: string): BootEntry[] {
+  const match = /(?:window\.__DSH_BOOT__|globalThis\["__DSH_BOOT__"\])\s*=\s*(\{.*\});<\/script>/u.exec(html)
+  if (match?.[1] === undefined) throw new Error('missing test boot manifest')
+  return (JSON.parse(match[1]) as { entries: BootEntry[] }).entries
+}
+
+interface TransportHooks {
+  fetch: typeof fetch
+  ownsHost?: boolean
+  openStream?: () => void
+  loadBundle?: () => void
+}
+
+function bootstrapPage(html: string, existingTransport?: TransportHooks) {
+  const nativeFetch = vi.fn<typeof fetch>(async () => new Response('{}', { status: 200 }))
+  const nativeBridge = Object.freeze({ request: vi.fn() })
+  const page: {
+    fetch: typeof fetch
+    __DSH_TRANSPORT__?: TransportHooks
+    __DSH_BOOT__?: unknown
+    __DSH_MOBILE_FRONTEND__?: string
+    dshMobileNative: typeof nativeBridge
+  } = { fetch: nativeFetch, dshMobileNative: nativeBridge }
+  if (existingTransport !== undefined) page.__DSH_TRANSPORT__ = existingTransport
+  const script = /<script>([\s\S]*?)<\/script>/u.exec(html)?.[1]
+  if (script === undefined) throw new Error('missing bootstrap script')
+  return {
+    page,
+    nativeFetch,
+    nativeBridge,
+    run() {
+      runInNewContext(script, {
+        window: page,
+        globalThis: page,
+        document: { cookie: `${CSRF_COOKIE}=paired-csrf-token` },
+        location: new URL('https://phone.example/'),
+        Headers, Request, URL,
+      })
+    },
+  }
 }
 
 describe('dedicated mobile layout boot', () => {
@@ -33,6 +112,7 @@ describe('dedicated mobile layout boot', () => {
     expect(output).toContain('"url":"/conversation.js"')
     expect(output).not.toContain('"url":"/layout.js"')
     expect(output).toContain('viewport-fit=cover')
+    expect(output).not.toContain('__DSH_TRANSPORT__')
   })
 
   it('orders the authenticated mobile client before settings without retaining the sidebar cycle', () => {
@@ -107,6 +187,88 @@ describe('dedicated mobile layout boot', () => {
     expect(output).toMatch(/"url":"\/mobile-access\/mobile-boot\/[a-f\d]{64}\.js"/u)
     expect(output).not.toContain('/plugins/application.js?rev=stock')
     expect(output).toContain(`"entries":${JSON.stringify(entries.map(entry => entry.id))}`)
+  })
+
+  it.each([false, true])('installs authenticated HTTP transport before the alpha.2 boot manifest (reverse roster: %s)', reverse => {
+    const entries = remoteSettingsEntries()
+    if (reverse) entries.reverse()
+    const output = rewriteMobileIndex(currentIndex(entries))
+    const rewritten = bootEntries(output)
+    expect(rewritten.find(entry => entry.id === 'dsh-mobile')?.inject).toEqual([connectionModule, rendererModule])
+    expect(rewritten.find(entry => entry.id === gatewayModule)?.inject).toEqual([
+      '@deepseek-ai/dsh-typert-registry', connectionModule, 'dsh-mobile',
+    ])
+    expect(rewritten.find(entry => entry.id === settingsModule)?.inject).toEqual([remotesModule, 'dsh-mobile'])
+    expect(output.indexOf('window.__DSH_TRANSPORT__=')).toBeLessThan(output.indexOf('globalThis["__DSH_BOOT__"]'))
+    const bootstrap = bootstrapPage(output)
+    bootstrap.run()
+    expect(bootstrap.page.__DSH_TRANSPORT__?.ownsHost).toBe(true)
+    expect(bootstrap.page.__DSH_TRANSPORT__?.fetch).toBeTypeOf('function')
+    expect(bootstrap.page.__DSH_TRANSPORT__).not.toHaveProperty('openStream')
+    expect(bootstrap.page.__DSH_TRANSPORT__).not.toHaveProperty('loadBundle')
+    expect(bootstrap.page.__DSH_MOBILE_FRONTEND__).toBe('dedicated')
+    expect(bootstrap.page.__DSH_BOOT__).toBeDefined()
+    expect(bootstrap.page.dshMobileNative).toBe(bootstrap.nativeBridge)
+    expect(bootstrap.nativeFetch).not.toHaveBeenCalled()
+  })
+
+  it('preserves fetch credentials, cancellation, body, and CSRF without a recursive transport', async () => {
+    const bootstrap = bootstrapPage(rewriteMobileIndex(currentIndex(remoteSettingsEntries())))
+    bootstrap.run()
+    const transport = bootstrap.page.__DSH_TRANSPORT__!
+    const signal = new AbortController().signal
+    const target = new URL('https://phone.example/api/settings/mutate')
+    await transport.fetch(target, {
+      method: 'POST', credentials: 'include', signal, body: 'payload', headers: { 'x-existing': 'kept' },
+    })
+    expect(bootstrap.nativeFetch).toHaveBeenCalledOnce()
+    const [input, init] = bootstrap.nativeFetch.mock.calls[0]!
+    expect(input).toBe(target)
+    expect(init).toMatchObject({ method: 'POST', credentials: 'include', body: 'payload' })
+    expect(init?.signal).toBe(signal)
+    expect(new Headers(init?.headers).get(CSRF_HEADER)).toBe('paired-csrf-token')
+    expect(new Headers(init?.headers).get('x-existing')).toBe('kept')
+
+    await transport.fetch(target, { method: 'POST', headers: { [CSRF_HEADER]: 'explicit-token' } })
+    expect(new Headers(bootstrap.nativeFetch.mock.calls[1]![1]?.headers).get(CSRF_HEADER)).toBe('explicit-token')
+    const externalInit = { method: 'POST', credentials: 'omit' as const }
+    await transport.fetch(new URL('https://other.example/api/test'), externalInit)
+    expect(bootstrap.nativeFetch.mock.calls[2]![1]).toBe(externalInit)
+    expect(bootstrap.nativeFetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('refuses an existing transport without replacing or promoting its capabilities', () => {
+    const existing = Object.freeze({ fetch: vi.fn<typeof fetch>(), ownsHost: false, openStream: vi.fn(), loadBundle: vi.fn() })
+    const bootstrap = bootstrapPage(rewriteMobileIndex(currentIndex(remoteSettingsEntries())), existing)
+    expect(() => bootstrap.run()).toThrow('DSH Mobile cannot replace an existing transport override')
+    expect(bootstrap.page.__DSH_TRANSPORT__).toBe(existing)
+    expect(existing.ownsHost).toBe(false)
+    expect(bootstrap.page.fetch).toBe(bootstrap.nativeFetch)
+    expect(bootstrap.page.__DSH_BOOT__).toBeUndefined()
+    expect(bootstrap.page.__DSH_MOBILE_FRONTEND__).toBeUndefined()
+  })
+
+  it.each([
+    { name: 'missing Remote assembly', module: remotesModule, change: 'remove' },
+    { name: 'duplicate Remote assembly', module: remotesModule, change: 'duplicate' },
+    { name: 'Remote assembly without Gateway', module: remotesModule, change: 'dependencies' },
+    { name: 'missing Gateway', module: gatewayModule, change: 'remove' },
+    { name: 'duplicate Gateway', module: gatewayModule, change: 'duplicate' },
+    { name: 'Gateway without Connection', module: gatewayModule, change: 'dependencies' },
+  ])('rejects the alpha.2 settings graph with $name', ({ module, change }) => {
+    const entries = remoteSettingsEntries()
+    const position = entries.findIndex(entry => entry.id === module)
+    const entry = entries[position]!
+    if (change === 'remove') entries.splice(position, 1)
+    else if (change === 'duplicate') entries.push({ ...entry })
+    else entry.inject = []
+    expect(() => rewriteMobileIndex(currentIndex(entries))).toThrow('settings Remote graph has unsupported dependencies')
+  })
+
+  it('rejects settings that has neither the Connection nor the Remote assembly dependency', () => {
+    const entries = remoteSettingsEntries()
+    entries.find(entry => entry.id === settingsModule)!.inject = [rendererModule]
+    expect(() => rewriteMobileIndex(currentIndex(entries))).toThrow('settings module has unsupported dependencies')
   })
 
   it('accepts the DSH 0.1.1 global injection syntax', () => {
