@@ -37,7 +37,7 @@ import { CpolarComponentManager, type CpolarComponentStatus } from './cpolar-com
 import { FrpComponentManager, type FrpComponentStatus } from './frp-component.js'
 import { FrpConfigStore, type FrpConfigurationStatus } from './frp-config.js'
 import { FrpController } from './frp.js'
-import { launchedProfileName, PluginReleaseManager } from './release-update.js'
+import { PluginReleaseManager, releaseProfileDirectory } from './release-update.js'
 import {
   configuredRemoteProvider,
   JsonRemoteProviderStore,
@@ -275,7 +275,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     ? dirname(stateDirectory)
     : resolve(configuredDshHome)
   const releaseManager = new PluginReleaseManager({
-    profileDirectory: join(dshHome, 'profiles', launchedProfileName(process.argv.slice(2))),
+    profileDirectory: releaseProfileDirectory(ctx, dshHome, process.argv.slice(2)),
   })
   const remoteProviderStore = new JsonRemoteProviderStore(
     join(remoteDirectory, 'provider.json'),
