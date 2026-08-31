@@ -26,11 +26,15 @@
 
 > DSH Mobile 是 DeepSeek Harness 社区插件，原生 App 仅支持 Android。
 >
-> **0.3.x 更新**：新增连接诊断、图片附件、自建 FRP 和插件更新入口，优化重连、移动布局、多语言与扩展热更新，并完善 DSH Desktop 及用量插件兼容。[详细记录与致谢](CHANGELOG.md)。
+> **0.3.4 更新**：适配 DSH 0.1.2-alpha.2，修复 Windows DSH Desktop 目录选择器冲突及插件更新时的配置识别，优化「移动访问」侧栏入口的布局、深色模式与键盘操作。[详细记录与致谢](CHANGELOG.md)。
 >
 > **升级提醒**：插件仍在快速迭代，建议与 App 同步更新；DSH 0.1.2-alpha.2 需使用 Mobile 插件 0.3.4 或更高版本。[兼容说明](#兼容性)。
 
-<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.4/dsh-mobile-android-v0.3.4.apk"><strong>下载 Android App 0.3.4</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.4">版本说明与校验文件</a></p>
+<p align="center">
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.4/dsh-mobile-android-v0.3.4.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile 安卓应用图标" width="72" height="72"></a><br>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.4/dsh-mobile-android-v0.3.4.apk"><strong>下载 Android App 0.3.4</strong></a><br>
+  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.4">版本说明与校验文件</a></sub>
+</p>
 
 DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 通过局域网，或可选的 Tailscale Funnel、cpolar、自建 FRP 远程通道连接电脑，继续使用同一份会话、工作区、消息和工具。局域网与远程访问分别启停、分别管理设备，且都不修改 DeepSeek Harness 源码。
 
