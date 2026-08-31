@@ -19,15 +19,11 @@
 
 > DSH Mobile is a DeepSeek Harness community plugin; the native app supports Android only.
 >
-> **0.3.3 update**: add an advanced self-hosted FRP channel, a one-click plugin update entry, and version-aware Android downloads; reorganize remote setup, fix settings occasionally reverting to desktop layout and dark-mode contrast, and strengthen remote-process cleanup, Android authentication, and download validation.
+> **0.3.x updates**: connection diagnostics, image attachments, self-hosted FRP, and plugin updates; improved reconnection, mobile layouts, localization, extension hot reload, and compatibility with DSH Desktop and usage plugins. [Details and acknowledgements](CHANGELOG.md).
 >
-> **0.3.2 update**: image selection and full-resolution capture move into the composer plus menu with file, size, concurrency, and interaction deadlines; extension and `/mobile` edits notify authenticated phones immediately while Host code, scripts, styles, and assets switch as one generation and retain a usable version on failure; scoped request paths and response limits are tightened, Android Bridge temporary files and grants are fully released, Funnel now follows the DSH lifecycle, native app screens follow the system Chinese/English/Italian locale, and plugin-owned UI follows DSH's locale.
->
-> **With DeepSeek Harness 0.1.2-alpha.1, update both the plugin and app to 0.3.2 or later**; older apps use a status-bar strategy that does not fit the new Web UI, and app 0.1.3 or earlier also requires reinstalling and pairing again.
->
-> The plugin is evolving rapidly; keep the plugin and app updated together. Self-hosted FRP requires an existing VPS, a domain, and Android app 0.3.3 or later.
+> **Upgrade reminder**: the plugin is evolving rapidly; keep it and the app updated together. DSH 0.1.2-alpha.2 requires Mobile plugin 0.3.4 or later. [Compatibility notes](#compatibility).
 
-<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.3/dsh-mobile-android-v0.3.3.apk"><strong>Download Android app 0.3.3</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.3">Release notes and checksums</a></p>
+<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.4/dsh-mobile-android-v0.3.4.apk"><strong>Download Android app 0.3.4</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.4">Release notes and checksums</a></p>
 
 DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN or an optional Tailscale Funnel, cpolar, or self-hosted FRP remote path. Local and remote access keep the same sessions, Workspaces, messages, and tools while using separate switches and paired-device stores without modifying DeepSeek Harness source.
 
@@ -78,6 +74,8 @@ Restart DSH, then search for **dsh-mobile** under **Settings → Plugin Market**
 `setup` automatically selects and remembers the current LAN; Wi-Fi, hotspot, and IP changes normally recover without re-pairing. Use `--address 192.168.x.x` only when automatic selection fails. Settings, certificates, devices, and customization files live under `$DSH_HOME/mobile-access/`.
 
 After installation, start DSH and use the connection guide below to choose LAN or remote access.
+
+Registry-installed plugins check for updates when the desktop UI loads and show “Update plugin” beside the access-panel title when a newer release is available. Restart DSH after installation. The app download entry shows the latest version; local development packages are not overwritten, and Android does not send update notifications.
 
 ## Connection guide
 
@@ -188,8 +186,11 @@ See [SECURITY.md](SECURITY.md).
 
 ## Compatibility
 
+Use Mobile plugin 0.3.4 with DSH 0.1.2-alpha.2; plugin and app 0.3.2 or later are recommended for DSH 0.1.2-alpha.1. Plugin 0.3.4 remains compatible with existing 0.3.3 apps without re-pairing. Earlier apps use a different status-bar strategy, so updating both is recommended. App 0.1.3 or earlier requires reinstalling and pairing again.
+
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
+| `0.3.4` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1`, `0.1.2-alpha.2` |
 | `0.3.3` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.3.2` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.3.1` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
@@ -200,6 +201,8 @@ See [SECURITY.md](SECURITY.md).
 | `0.1.4` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
 
 At startup, the plugin verifies the DSH Host version and the frontend dependencies required by the mobile layout; an unverified release fails with a clear error instead of serving a broken page. CI also tracks the DSH main branch layout contract. If a DSH upgrade reports an incompatibility, update DSH Mobile first.
+
+0.3.4 fixes duplicate directory-picker registration in Windows [DSH Desktop](https://github.com/anywhere-labs/dsh-desktop). It reuses the desktop host's in-page directory browser; standalone Web launches still let phones select workspaces on the computer. Mobile access through Desktop requires compatibility mode and browser access enabled, with Mobile's upstream address matching Desktop's listening port.
 
 ## Uninstall
 

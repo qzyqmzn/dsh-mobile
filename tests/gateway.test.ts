@@ -169,7 +169,7 @@ function websocketAccept(key: string): string {
   return createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`, 'ascii').digest('base64')
 }
 
-async function upstream(boot: 'legacy' | 'batched' = 'legacy', requireAuthentication = false): Promise<{
+async function upstream(boot: 'legacy' | 'batched' | 'remote-settings' = 'legacy', requireAuthentication = false): Promise<{
   port: number
   observations: UpstreamObservation[]
   upgradeObservations: IncomingHttpHeaders[]
@@ -221,6 +221,13 @@ async function upstream(boot: 'legacy' | 'batched' = 'legacy', requireAuthentica
             },
             { id: 'feature', url: '/plugins/feature.js?rev=feature', rev: 'feature' },
           ]
+      if (boot === 'remote-settings') entries.push(
+        { id: '@deepseek-ai/dsh-client-connection', url: '/plugins/connection.js?rev=connection', rev: 'connection', inject: [] },
+        { id: '@deepseek-ai/dsh-api-gateway', url: '/plugins/gateway.js?rev=gateway', rev: 'gateway', inject: ['@deepseek-ai/dsh-client-connection'] },
+        { id: '@deepseek-ai/dsh-api-remotes', url: '/plugins/remotes.js?rev=remotes', rev: 'remotes', inject: ['@deepseek-ai/dsh-api-gateway'] },
+        { id: '@deepseek-ai/dsh-client-ui-settings', url: '/plugins/settings.js?rev=settings', rev: 'settings', inject: ['@deepseek-ai/dsh-api-remotes'] },
+        { id: 'dsh-mobile', url: '/plugins/mobile.js?rev=mobile', rev: 'mobile', inject: ['@deepseek-ai/dsh-client-connection', '@deepseek-ai/dsh-client-ui-sidebar'] },
+      )
       const graph = boot === 'legacy'
         ? { rev: 'stock', entries }
         : { rev: 'stock', entries, batches: [{ phase: 'application', url: '/plugins/application.js?rev=stock', rev: 'stock-batch', entries: entries.map(entry => entry.id) }] }
@@ -500,6 +507,31 @@ describe('HTTP gateway', () => {
     expect(stock.status).toBe(200)
     expect(stock.body).not.toContain('__DSH_MOBILE_FRONTEND__')
     expect(stock.body).toContain('/plugins/layout.js')
+  })
+
+  it('exposes the alpha.2 trusted HTTP carrier only on an authenticated dedicated page', async () => {
+    const inner = await upstream('remote-settings')
+    const instance = await gateway(inner.port)
+    const browser = { ...browserHeaders(instance), accept: 'text/html' }
+    const anonymous = await request(instance.address().port, '/', { headers: browser })
+    expect(anonymous.status).toBe(302)
+    expect(anonymous.body).not.toContain('__DSH_TRANSPORT__')
+    expect(inner.observations).toHaveLength(0)
+    const login = await request(instance.address().port, '/mobile-access/login', { headers: browser })
+    expect(login.status).toBe(200)
+    expect(login.body).not.toContain('__DSH_TRANSPORT__')
+
+    const paired = await pair(instance)
+    const headers = { ...browser, cookie: `${SESSION_COOKIE}=${paired.session}` }
+    const dedicated = await request(instance.address().port, '/', { headers })
+    expect(dedicated.status).toBe(200)
+    expect(dedicated.body).toContain('window.__DSH_TRANSPORT__={fetch:')
+    expect(dedicated.body).toContain('ownsHost:true')
+    expect(dedicated.body).toContain('window.__DSH_MOBILE_FRONTEND__="dedicated"')
+    const stock = await request(instance.address().port, '/?frontend=stock', { headers })
+    expect(stock.status).toBe(200)
+    expect(stock.body).not.toContain('__DSH_TRANSPORT__')
+    expect(stock.body).not.toContain('__DSH_MOBILE_FRONTEND__')
   })
 
   it('serves a DSH 0.1.2 mobile application batch without the stock layout factory', async () => {

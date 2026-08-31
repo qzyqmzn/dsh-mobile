@@ -1,6 +1,6 @@
 {
   "name": "dsh-mobile",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": false,
   "description": "DeepSeek Harness 移动端适配与安全访问插件，支持局域网、远程连接、Android App 和手机浏览器。",
   "type": "module",
@@ -99,10 +99,10 @@
   "license": "Apache-2.0",
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-client-connection": "0.1.0-rc.5 || 0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.1-rc.2 || 0.1.2-alpha.1",
-    "@deepseek-ai/dsh-commands": "0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.1-rc.2 || 0.1.2-alpha.1",
-    "@deepseek-ai/dsh-host-webserver": "0.1.0-rc.5 || 0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.1-rc.2 || 0.1.2-alpha.1",
-    "@deepseek-ai/dsh-llm": "0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.1-rc.2 || 0.1.2-alpha.1",
+    "@deepseek-ai/dsh-client-connection": "0.1.0-rc.5 || 0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.1-rc.2 || 0.1.2-alpha.1 || 0.1.2-alpha.2",
+    "@deepseek-ai/dsh-commands": "0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.1-rc.2 || 0.1.2-alpha.1 || 0.1.2-alpha.2",
+    "@deepseek-ai/dsh-host-webserver": "0.1.0-rc.5 || 0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.1-rc.2 || 0.1.2-alpha.1 || 0.1.2-alpha.2",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.1-rc.2 || 0.1.2-alpha.1 || 0.1.2-alpha.2",
     "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
@@ -132,7 +132,9 @@
     "selfsigned": "^5.5.0"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/cordis-plugin-include": "1.0.6",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.2",
     "@deepseek-ai/dsh-commands": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-host-webserver": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-llm": "^0.1.1-rc.2",

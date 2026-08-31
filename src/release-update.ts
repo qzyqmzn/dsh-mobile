@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { createRequire } from 'node:module'
+import type { Context } from '@deepseek-ai/cordis'
 import { DSH_MOBILE_VERSION } from './version.js'
 
 const PACKAGE_NAME = 'dsh-mobile'
@@ -44,7 +45,7 @@ export interface PluginUpdateResult {
 }
 
 interface PluginReleaseManagerOptions {
-  readonly profileDirectory: string
+  readonly profileDirectory: string | undefined
   readonly installedVersion?: string
   readonly fetch?: typeof globalThis.fetch
   readonly runUpdate?: (profileDirectory: string, version: string) => Promise<void>
@@ -155,6 +156,20 @@ export function launchedProfileName(argv: readonly string[]): string {
     if (match?.[1] !== undefined) return match[1]
   }
   return 'web'
+}
+
+interface DesktopProfiles {
+  readonly current?: { readonly dir?: string }
+}
+
+/** Resolve the launcher-owned Desktop profile, or the CLI profile outside Desktop. */
+export function releaseProfileDirectory(ctx: Pick<Context, 'get'>, dshHome: string, argv: readonly string[]): string | undefined {
+  const desktopProfiles = ctx.get('desktopProfiles') as DesktopProfiles | undefined
+  const desktopDirectory = desktopProfiles?.current?.dir
+  if (typeof desktopDirectory === 'string' && isAbsolute(desktopDirectory)) return desktopDirectory
+  // Desktop selects its profile outside argv; never update an unrelated Web profile.
+  if (desktopProfiles !== undefined || ctx.get('desktopRuntime') !== undefined) return undefined
+  return join(dshHome, 'profiles', launchedProfileName(argv))
 }
 
 async function profileDependencySpec(profileDirectory: string): Promise<string | undefined> {
@@ -378,7 +393,7 @@ async function runPnpmUpdate(profileDirectory: string, version: string, runtime:
 
 /** Cached npm/GitHub release lookup and guarded profile-local package update. */
 export class PluginReleaseManager {
-  private readonly profileDirectory: string
+  private readonly profileDirectory: string | undefined
   private readonly installedVersion: string
   private readonly fetcher: typeof globalThis.fetch
   private readonly runner: (profileDirectory: string, version: string) => Promise<void>
@@ -399,7 +414,7 @@ export class PluginReleaseManager {
   /** Read cached release metadata and suppress external lookup failures. */
   async status(force = false): Promise<PluginReleaseStatus> {
     if (!force && this.cache !== undefined && this.cache.expiresAt > this.now()) return this.cache.status
-    const dependencySpec = await profileDependencySpec(this.profileDirectory)
+    const dependencySpec = this.profileDirectory === undefined ? undefined : await profileDependencySpec(this.profileDirectory)
     const updateSupported = isRegistryPluginSpec(dependencySpec)
     const [npmResult, androidResult] = await Promise.allSettled([
       fetchNpmVersion(this.fetcher),
@@ -431,11 +446,13 @@ export class PluginReleaseManager {
   }
 
   private async updateOnce(): Promise<PluginUpdateResult> {
+    const profileDirectory = this.profileDirectory
+    if (profileDirectory === undefined) throw new Error('plugin_update_unsupported')
     const status = await this.status(true)
     if (!status.updateSupported) throw new Error('plugin_update_unsupported')
     if (!status.updateAvailable || status.latestVersion === undefined) throw new Error('plugin_update_unavailable')
-    await this.runner(this.profileDirectory, status.latestVersion)
-    const installed = await this.installedVersionReader(this.profileDirectory)
+    await this.runner(profileDirectory, status.latestVersion)
+    const installed = await this.installedVersionReader(profileDirectory)
     if (installed !== status.latestVersion) throw new Error('plugin_update_failed')
     this.cache = undefined
     return Object.freeze({ installedVersion: installed, restartRequired: true })

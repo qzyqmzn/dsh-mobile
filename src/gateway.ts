@@ -109,6 +109,8 @@ const RUNTIME_MODULE = '@deepseek-ai/dsh-client-runtime'
 const RENDERER_MODULE = '@deepseek-ai/dsh-client-ui-renderer'
 const SIDEBAR_MODULE = '@deepseek-ai/dsh-client-ui-sidebar'
 const SETTINGS_MODULE = '@deepseek-ai/dsh-client-ui-settings'
+const API_GATEWAY_MODULE = '@deepseek-ai/dsh-api-gateway'
+const API_REMOTES_MODULE = '@deepseek-ai/dsh-api-remotes'
 const MOBILE_LAYOUT_DEPENDENCY_PROFILES = Object.freeze([
   Object.freeze({
     slots: RUNTIME_MODULE,
@@ -125,6 +127,8 @@ const MOBILE_LAYOUT_DEPENDENCY_PROFILES = Object.freeze([
   }),
 ])
 const MOBILE_CSRF_FETCH_BOOTSTRAP = `(()=>{const nativeFetch=window.fetch.bind(window);window.fetch=(input,init)=>{const source=input instanceof Request?input:undefined;const method=String(init?.method??source?.method??'GET').toUpperCase();if(method==='GET'||method==='HEAD')return nativeFetch(input,init);const raw=typeof input==='string'?input:input instanceof URL?input.href:source?.url;if(raw===undefined||new URL(raw,location.href).origin!==location.origin)return nativeFetch(input,init);const headers=new Headers(init?.headers??source?.headers);if(!headers.has(${JSON.stringify(CSRF_HEADER)})){const prefix=${JSON.stringify(`${CSRF_COOKIE}=`)};const token=document.cookie.split(';').map(value=>value.trim()).find(value=>value.startsWith(prefix))?.slice(prefix.length);if(token!==undefined)headers.set(${JSON.stringify(CSRF_HEADER)},token)}return nativeFetch(input,{...init,headers})};})();`
+// Paired pages use the gateway's authenticated HTTP carrier; streams retain DSH's WebSocket transport.
+const MOBILE_AUTHENTICATED_TRANSPORT_BOOTSTRAP = `(()=>{if(window.__DSH_TRANSPORT__!==undefined)throw new Error('DSH Mobile cannot replace an existing transport override');window.__DSH_TRANSPORT__={fetch:(input,init)=>window.fetch(input,init),ownsHost:true}})();`
 const PAIR_PAGE = `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
@@ -202,22 +206,36 @@ function ensureMobileViewport(html: string): string {
   return `${html.slice(0, match.index)}${next}${html.slice(match.index + match[0].length)}`
 }
 
-function orderAuthenticatedSettings(entries: BootGraphEntry[], slotsProvider: string): void {
+function orderAuthenticatedSettings(entries: BootGraphEntry[], slotsProvider: string): boolean {
   const mobile = entries.filter(entry => entry !== null && typeof entry === 'object' && entry.id === MOBILE_CLIENT_MODULE)
   const settings = entries.filter(entry => entry !== null && typeof entry === 'object' && entry.id === SETTINGS_MODULE)
-  if (mobile.length === 0 || settings.length === 0) return
+  if (mobile.length === 0 || settings.length === 0) return false
   if (mobile.length !== 1 || settings.length !== 1) throw new Error('upstream DSH mobile settings graph is ambiguous')
   if (!Array.isArray(mobile[0]?.inject)
     || !mobile[0].inject.includes(CONNECTION_MODULE)
     || !mobile[0].inject.includes(SIDEBAR_MODULE)) {
     throw new Error('dsh-mobile client has unsupported dependencies')
   }
-  if (!Array.isArray(settings[0]?.inject)
-    || !settings[0].inject.includes(CONNECTION_MODULE)) {
+  if (!Array.isArray(settings[0]?.inject)) {
     throw new Error('upstream DSH settings module has unsupported dependencies')
+  }
+  const remoteSettings = !settings[0].inject.includes(CONNECTION_MODULE)
+  if (remoteSettings) {
+    if (!settings[0].inject.includes(API_REMOTES_MODULE) || slotsProvider !== RENDERER_MODULE) {
+      throw new Error('upstream DSH settings module has unsupported dependencies')
+    }
+    const remotes = entries.filter(entry => entry !== null && typeof entry === 'object' && entry.id === API_REMOTES_MODULE)
+    const gateway = entries.filter(entry => entry !== null && typeof entry === 'object' && entry.id === API_GATEWAY_MODULE)
+    if (remotes.length !== 1 || !Array.isArray(remotes[0]?.inject) || !remotes[0].inject.includes(API_GATEWAY_MODULE)
+      || gateway.length !== 1 || !Array.isArray(gateway[0]?.inject) || !gateway[0].inject.includes(CONNECTION_MODULE)) {
+      throw new Error('upstream DSH settings Remote graph has unsupported dependencies')
+    }
+    // These package edges order factory arrival; authenticated transport trust is installed before boot.
+    if (!gateway[0].inject.includes(MOBILE_CLIENT_MODULE)) gateway[0].inject = [...gateway[0].inject, MOBILE_CLIENT_MODULE]
   }
   mobile[0].inject = [CONNECTION_MODULE, slotsProvider]
   if (!settings[0].inject.includes(MOBILE_CLIENT_MODULE)) settings[0].inject = [...settings[0].inject, MOBILE_CLIENT_MODULE]
+  return remoteSettings
 }
 
 function revisionedMobileBatchPath(entries: readonly MobileBootBatchEntry[]): { readonly key: string; readonly path: string } {
@@ -254,7 +272,7 @@ function rewriteMobileIndexWithBatch(html: string): RewrittenMobileIndex {
   if (dependencyProfile === undefined) throw new Error('upstream DSH layout module has unsupported dependencies')
   layout[0].url = MOBILE_LAYOUT_PATH
   layout[0].rev = `dsh-mobile-layout-${DSH_MOBILE_VERSION}`
-  orderAuthenticatedSettings(entries, dependencyProfile.slots)
+  const remoteSettings = orderAuthenticatedSettings(entries, dependencyProfile.slots)
 
   let mobileBatch: MobileBootBatchPlan | undefined
   if (parsed.batches !== undefined) {
@@ -290,7 +308,8 @@ function rewriteMobileIndexWithBatch(html: string): RewrittenMobileIndex {
     mobileBatch = Object.freeze({ ...revision, entries: Object.freeze(planEntries) })
     parsed.rev = createHash('sha256').update(JSON.stringify({ entries, batches })).digest('hex').slice(0, 16)
   }
-  const replacement = `${MOBILE_CSRF_FETCH_BOOTSTRAP}window.__DSH_MOBILE_FRONTEND__="dedicated";${assignment[0]}${JSON.stringify(parsed)};`
+  const transportBootstrap = remoteSettings ? MOBILE_AUTHENTICATED_TRANSPORT_BOOTSTRAP : ''
+  const replacement = `${transportBootstrap}${MOBILE_CSRF_FETCH_BOOTSTRAP}window.__DSH_MOBILE_FRONTEND__="dedicated";${assignment[0]}${JSON.stringify(parsed)};`
   return Object.freeze({
     html: ensureMobileViewport(`${html.slice(0, start)}${replacement}${html.slice(scriptEnd)}`),
     ...(mobileBatch === undefined ? {} : { batch: mobileBatch }),

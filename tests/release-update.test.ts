@@ -3,11 +3,13 @@ import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
 import {
   PluginReleaseManager,
   comparePluginVersions,
   isRegistryPluginSpec,
   launchedProfileName,
+  releaseProfileDirectory,
 } from '../src/release-update.js'
 
 const temporaryDirectories: string[] = []
@@ -95,6 +97,67 @@ describe('profile-local release updates', () => {
     })
     await expect(manager.update()).resolves.toEqual({ installedVersion: '0.3.3', restartRequired: true })
     expect(runUpdate).toHaveBeenCalledWith(directory, '0.3.3')
+  })
+
+  it('uses the launcher-selected Desktop directory instead of the CLI Web profile', async () => {
+    const directory = await profileDirectory('^0.3.2')
+    const ctx = new Context()
+    ctx.provide('desktopRuntime', { platform: 'win32' })
+    ctx.provide('desktopProfiles', { current: { name: 'desktop-test', dir: directory } })
+    const selectedDirectory = releaseProfileDirectory(ctx, tmpdir(), ['--profile', 'web'])
+    expect(selectedDirectory).toBe(directory)
+    const runUpdate = vi.fn(async () => {})
+    const manager = new PluginReleaseManager({
+      profileDirectory: selectedDirectory,
+      installedVersion: '0.3.2',
+      fetch: releaseFetch('0.3.3'),
+      runUpdate,
+      readInstalledVersion: async () => '0.3.3',
+    })
+    await expect(manager.status()).resolves.toMatchObject({ updateAvailable: true, updateSupported: true })
+    await expect(manager.update()).resolves.toEqual({ installedVersion: '0.3.3', restartRequired: true })
+    expect(runUpdate).toHaveBeenCalledExactlyOnceWith(directory, '0.3.3')
+  })
+
+  it.each([
+    undefined,
+    {},
+    { current: {} },
+    { current: { dir: '' } },
+    { current: { dir: './profiles/desktop' } },
+  ])('disables updating when Desktop has no usable current directory: %j', async profiles => {
+    const ctx = new Context()
+    ctx.provide('desktopRuntime', { platform: 'win32' })
+    if (profiles !== undefined) ctx.provide('desktopProfiles', profiles)
+    const selectedDirectory = releaseProfileDirectory(ctx, tmpdir(), ['--profile', 'web'])
+    expect(selectedDirectory).toBeUndefined()
+    const runUpdate = vi.fn(async () => {})
+    const manager = new PluginReleaseManager({
+      profileDirectory: selectedDirectory,
+      installedVersion: '0.3.2',
+      fetch: releaseFetch('0.3.3'),
+      runUpdate,
+    })
+    await expect(manager.status()).resolves.toMatchObject({
+      updateAvailable: false,
+      updateSupported: false,
+      androidVersion: '0.3.3',
+    })
+    await expect(manager.update()).rejects.toThrow('plugin_update_unsupported')
+    expect(runUpdate).not.toHaveBeenCalled()
+  })
+
+  it('does not fall back to Web when only the Desktop profile service is present', () => {
+    const ctx = new Context()
+    ctx.provide('desktopProfiles', { current: {} })
+    expect(releaseProfileDirectory(ctx, tmpdir(), ['--profile', 'web'])).toBeUndefined()
+  })
+
+  it('retains default and explicit CLI profile resolution outside Desktop', () => {
+    const ctx = new Context()
+    expect(releaseProfileDirectory(ctx, tmpdir(), [])).toBe(join(tmpdir(), 'profiles', 'web'))
+    expect(releaseProfileDirectory(ctx, tmpdir(), ['--profile', 'work'])).toBe(join(tmpdir(), 'profiles', 'work'))
+    expect(releaseProfileDirectory(ctx, tmpdir(), ['--profile=work'])).toBe(join(tmpdir(), 'profiles', 'work'))
   })
 
   it('never offers to overwrite a linked source checkout', async () => {

@@ -120,12 +120,71 @@ const locationTrust = 'pageLocation === undefined || isLoopbackHostname(pageLoca
 if (!connectionSource.includes(locationTrust)) {
   throw new Error(`DSH connection trust contract changed: missing ${locationTrust}`)
 }
-if (clientArchitecture === 'renderer-v2' && !connectionSource.includes('transport?.ownsHost === true')) {
-  throw new Error('DSH renderer-v2 connection no longer recognizes a Host-owning transport')
+if (clientArchitecture === 'renderer-v2') {
+  for (const declaration of [
+    'transport?.ownsHost === true',
+    'const transport = (globalThis as ClientTransportGlobal).__DSH_TRANSPORT__',
+    'createWebConnectionRpc(transport?.fetch, transport?.openStream)',
+  ]) {
+    if (!connectionSource.includes(declaration)) {
+      throw new Error(`DSH renderer-v2 Connection transport contract changed: missing ${declaration}`)
+    }
+  }
 }
 
 const settingsSource = await text('packages/client/ui-settings/src/client/index.ts')
-if (!settingsSource.includes("connection.isLoopback ? 'host' : 'memory'")) {
+const settingsManifest = await json('packages/client/ui-settings/package.json')
+const settingsInject = settingsManifest.dsh?.client?.inject
+const directSettingsTrust = settingsSource.includes("connection.isLoopback ? 'host' : 'memory'")
+const remoteSettingsTrust = settingsSource.includes("ctx.remote.$host.isLoopback ? 'host' : 'memory'")
+if (directSettingsTrust && !remoteSettingsTrust) {
+  if (!Array.isArray(settingsInject) || !settingsInject.includes('@deepseek-ai/dsh-client-connection')) {
+    throw new Error('DSH settings trust contract changed: direct trust requires the Connection module')
+  }
+} else if (remoteSettingsTrust && !directSettingsTrust) {
+  if (clientArchitecture !== 'renderer-v2'
+    || !Array.isArray(settingsInject)
+    || !settingsInject.includes('@deepseek-ai/dsh-api-remotes')
+    || settingsInject.includes('@deepseek-ai/dsh-client-connection')) {
+    throw new Error('DSH settings trust contract changed: Remote Host facts require the renderer-v2 Remote dependency profile')
+  }
+  const remotesManifest = await json('packages/api/remotes/package.json')
+  const gatewayManifest = await json('packages/api/gateway/package.json')
+  for (const [manifest, label, required] of [
+    [remotesManifest, 'Remote assembly', '@deepseek-ai/dsh-api-gateway'],
+    [gatewayManifest, 'API Gateway', '@deepseek-ai/dsh-client-connection'],
+  ]) {
+    if (manifest.version !== root.version) throw new Error(`DSH ${label} version does not match DSH ${root.version}`)
+    if (!Array.isArray(manifest.dsh?.client?.inject) || !manifest.dsh.client.inject.includes(required)) {
+      throw new Error(`DSH ${label} trust dependency changed: missing ${required}`)
+    }
+  }
+  const rendererManifest = await json('packages/client/ui-renderer/package.json')
+  const rendererInject = rendererManifest.dsh?.client?.inject
+  if (rendererInject !== undefined && (!Array.isArray(rendererInject) || rendererInject.length !== 0)) {
+    throw new Error('DSH UI renderer gained dependencies; authenticated trust ordering must be reviewed')
+  }
+  const rendererSource = await text('packages/client/ui-renderer/src/client/index.ts')
+  const remotesSource = await text('packages/api/remotes/src/client/index.ts')
+  const gatewaySource = await text('packages/api/gateway/src/client/index.ts')
+  for (const [source, label, declarations] of [
+    [settingsSource, 'settings Remote trust', ["export const inject = ['remote', 'remote.settings']"]],
+    [rendererSource, 'UI renderer trust ordering', ['export const inject: string[] = []', 'new SlotRegistry(ctx)']],
+    [remotesSource, 'Remote assembly', ["export const inject = ['remote']", 'ctx.remote.$mount(contribution)']],
+    [gatewaySource, 'API Gateway Host facts', [
+      "export const inject = ['typert', 'connection']",
+      "const connection = ctx.get('connection') as ConnectionHandle",
+      'this.connection = connection',
+      'get $host(): RemoteHostFacts',
+      'this.hostFacts === undefined || this.hostFacts.home !== home',
+      'this.hostFacts = { home, isLoopback: this.connection.isLoopback }',
+    ]],
+  ]) {
+    for (const declaration of declarations) {
+      if (!source.includes(declaration)) throw new Error(`DSH ${label} contract changed: missing ${declaration}`)
+    }
+  }
+} else {
   throw new Error('DSH settings trust contract changed')
 }
 
