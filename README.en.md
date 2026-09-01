@@ -19,14 +19,14 @@
 
 > DSH Mobile is a DeepSeek Harness community plugin; the native app supports Android only.
 >
-> **0.3.4 updates**: support DSH 0.1.2-alpha.2; fix directory-picker conflicts and update-profile detection in Windows DSH Desktop; improve the Mobile Access sidebar layout, dark-mode icons, and keyboard accessibility. [Details and acknowledgements](CHANGELOG.md).
+> **0.3.5 update**: fix a mobile startup hang when DSH sends a large first WebSocket payload immediately after the upgrade response; the fix applies to both LAN and remote access, and existing 0.3.3/0.3.4 apps do not need re-pairing. [Details and acknowledgements](CHANGELOG.md).
 >
 > **Upgrade reminder**: the plugin is evolving rapidly; keep it and the app updated together. DSH 0.1.2-alpha.2 requires Mobile plugin 0.3.4 or later. [Compatibility notes](#compatibility).
 
 <p align="center">
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.4/dsh-mobile-android-v0.3.4.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile Android app icon" width="72" height="72"></a><br>
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.4/dsh-mobile-android-v0.3.4.apk"><strong>Download Android app 0.3.4</strong></a><br>
-  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.4">Release notes and checksums</a></sub>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.5/dsh-mobile-android-v0.3.5.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile Android app icon" width="72" height="72"></a><br>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.5/dsh-mobile-android-v0.3.5.apk"><strong>Download Android app 0.3.5</strong></a><br>
+  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.5">Release notes and checksums</a></sub>
 </p>
 
 DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN or an optional Tailscale Funnel, cpolar, or self-hosted FRP remote path. Local and remote access keep the same sessions, Workspaces, messages, and tools while using separate switches and paired-device stores without modifying DeepSeek Harness source.
@@ -190,10 +190,11 @@ See [SECURITY.md](SECURITY.md).
 
 ## Compatibility
 
-Use Mobile plugin 0.3.4 with DSH 0.1.2-alpha.2; plugin and app 0.3.2 or later are recommended for DSH 0.1.2-alpha.1. Plugin 0.3.4 remains compatible with existing 0.3.3 apps without re-pairing. Earlier apps use a different status-bar strategy, so updating both is recommended. App 0.1.3 or earlier requires reinstalling and pairing again.
+Use Mobile plugin 0.3.4 or later with DSH 0.1.2-alpha.2; plugin and app 0.3.2 or later are recommended for DSH 0.1.2-alpha.1. Plugin 0.3.5 remains compatible with existing 0.3.3/0.3.4 apps without re-pairing; the 0.3.5 Android build changes version metadata only and keeps the same behavior. Earlier apps use a different status-bar strategy, so updating both is recommended. App 0.1.3 or earlier requires reinstalling and pairing again.
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
+| `0.3.5` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1`, `0.1.2-alpha.2` |
 | `0.3.4` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1`, `0.1.2-alpha.2` |
 | `0.3.3` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.3.2` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |

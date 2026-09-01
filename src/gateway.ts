@@ -1994,12 +1994,15 @@ export class MobileAccessGateway {
       const closed = (): void => { cleanup(); reject(new Error('upstream closed during WebSocket handshake')) }
       const data = (chunk: Buffer): void => {
         buffer = Buffer.concat([buffer, chunk])
-        if (buffer.length > MAX_HEADER_BYTES) {
+        const end = buffer.indexOf('\r\n\r\n')
+        if (end < 0) {
+          if (buffer.length >= MAX_HEADER_BYTES) failed(new Error('upstream WebSocket headers are too large'))
+          return
+        }
+        if (end + 4 > MAX_HEADER_BYTES) {
           failed(new Error('upstream WebSocket headers are too large'))
           return
         }
-        const end = buffer.indexOf('\r\n\r\n')
-        if (end < 0) return
         cleanup()
         const lines = buffer.subarray(0, end).toString('latin1').split('\r\n')
         if (lines.shift() !== 'HTTP/1.1 101 Switching Protocols') {
