@@ -169,14 +169,32 @@ function websocketAccept(key: string): string {
   return createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`, 'ascii').digest('base64')
 }
 
-async function upstream(boot: 'legacy' | 'batched' | 'remote-settings' = 'legacy', requireAuthentication = false): Promise<{
+function websocketBinaryFrame(payload: Buffer): Buffer {
+  if (payload.length > 0xffff) throw new Error('test WebSocket payload is too large')
+  const frame = Buffer.allocUnsafe(payload.length + 4)
+  frame[0] = 0x82
+  frame[1] = 126
+  frame.writeUInt16BE(payload.length, 2)
+  payload.copy(frame, 4)
+  return frame
+}
+
+async function upstream(
+  boot: 'legacy' | 'batched' | 'remote-settings' = 'legacy',
+  requireAuthentication = false,
+  upgradeBurst: Buffer = Buffer.alloc(0),
+  upgradeHeaderLines: string[] = [],
+  upgradeHeaderBytes?: number,
+): Promise<{
   port: number
   observations: UpstreamObservation[]
   upgradeObservations: IncomingHttpHeaders[]
+  upgradeResponseBytes: number[]
   releaseHold: () => void
 }> {
   const observations: UpstreamObservation[] = []
   const upgradeObservations: IncomingHttpHeaders[] = []
+  const upgradeResponseBytes: number[] = []
   const held: Array<() => void> = []
   const upgraded = new Set<Socket>()
   const server = createServer(async (incoming, response) => {
@@ -287,15 +305,29 @@ async function upstream(boot: 'legacy' | 'batched' | 'remote-settings' = 'legacy
       networkSocket.destroy()
       return
     }
-    networkSocket.write([
+    const responseLines = [
       'HTTP/1.1 101 Switching Protocols',
       'Upgrade: websocket',
       'Connection: Upgrade',
       `Sec-WebSocket-Accept: ${websocketAccept(key)}`,
       'Set-Cookie: upstream-secret=must-not-pass',
+      ...upgradeHeaderLines,
       '',
       '',
-    ].join('\r\n'))
+    ]
+    let response = Buffer.from(responseLines.join('\r\n'), 'latin1')
+    if (upgradeHeaderBytes !== undefined) {
+      const paddingOverhead = Buffer.byteLength('X-Padding: \r\n', 'latin1')
+      const paddingBytes = upgradeHeaderBytes - response.length - paddingOverhead
+      if (paddingBytes < 0) {
+        networkSocket.destroy(new Error('requested WebSocket response header is too small'))
+        return
+      }
+      responseLines.splice(-2, 0, `X-Padding: ${'x'.repeat(paddingBytes)}`)
+      response = Buffer.from(responseLines.join('\r\n'), 'latin1')
+    }
+    upgradeResponseBytes.push(response.length)
+    networkSocket.write(Buffer.concat([response, upgradeBurst]))
     networkSocket.pipe(networkSocket)
   })
   const port = await listen(server)
@@ -304,6 +336,7 @@ async function upstream(boot: 'legacy' | 'batched' | 'remote-settings' = 'legacy
     port,
     observations,
     upgradeObservations,
+    upgradeResponseBytes,
     releaseHold: () => { for (const release of held.splice(0)) release() },
   }
 }
@@ -369,9 +402,11 @@ async function openWebSocket(
   session: string,
   origin?: string,
   fetchSite: string | undefined = 'same-origin',
+  minimumRemainderBytes = 0,
 ): Promise<{
   socket: Socket
   response: string
+  remainder: Buffer
 }> {
   const address = instance.address()
   const key = Buffer.from('0123456789abcdef').toString('base64')
@@ -380,12 +415,18 @@ async function openWebSocket(
     let buffer = Buffer.alloc(0)
     const timeout = setTimeout(() => { socket.destroy(); reject(new Error('WebSocket handshake timed out')) }, 3_000)
     socket.once('error', reject)
+    socket.once('close', () => {
+      clearTimeout(timeout)
+      reject(new Error('WebSocket closed before handshake'))
+    })
     socket.on('data', (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk])
       const end = buffer.indexOf('\r\n\r\n')
       if (end < 0) return
+      const remainder = buffer.subarray(end + 4)
+      if (remainder.length < minimumRemainderBytes) return
       clearTimeout(timeout)
-      resolve({ socket, response: buffer.subarray(0, end).toString('latin1') })
+      resolve({ socket, response: buffer.subarray(0, end).toString('latin1'), remainder })
     })
     socket.once('connect', () => {
       socket.write([
@@ -1203,6 +1244,45 @@ describe('HTTP gateway', () => {
 })
 
 describe('WebSocket gateway', () => {
+  it('forwards a large first frame delivered with the upstream upgrade response', async () => {
+    const firstFrame = websocketBinaryFrame(Buffer.alloc(26 * 1024, 0x5a))
+    const inner = await upstream('legacy', false, firstFrame)
+    const instance = await gateway(inner.port)
+    const paired = await pair(instance)
+    const opened = await openWebSocket(
+      instance,
+      '/api/events.mux',
+      paired.session,
+      undefined,
+      undefined,
+      firstFrame.length,
+    )
+
+    expect(opened.response).toContain('101 Switching Protocols')
+    expect(opened.remainder).toEqual(firstFrame)
+    opened.socket.destroy()
+  })
+
+  it('accepts an upstream WebSocket response whose headers exactly meet the header limit', async () => {
+    const inner = await upstream('legacy', false, Buffer.alloc(0), [], 16 * 1024)
+    const instance = await gateway(inner.port)
+    const paired = await pair(instance)
+    const opened = await openWebSocket(instance, '/api/events.mux', paired.session)
+
+    expect(inner.upgradeResponseBytes).toEqual([16 * 1024])
+    expect(opened.response).toContain('101 Switching Protocols')
+    opened.socket.destroy()
+  })
+
+  it('rejects an upstream WebSocket response one byte beyond the header limit', async () => {
+    const inner = await upstream('legacy', false, Buffer.alloc(0), [], 16 * 1024 + 1)
+    const instance = await gateway(inner.port)
+    const paired = await pair(instance)
+
+    await expect(openWebSocket(instance, '/api/events.mux', paired.session)).rejects.toThrow()
+    expect(inner.upgradeResponseBytes).toEqual([16 * 1024 + 1])
+  })
+
   it('accepts an exact-origin Android WebView upgrade without Fetch Metadata', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)

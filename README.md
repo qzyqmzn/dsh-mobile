@@ -26,14 +26,14 @@
 
 > DSH Mobile 是 DeepSeek Harness 社区插件，原生 App 仅支持 Android。
 >
-> **0.3.4 更新**：适配 DSH 0.1.2-alpha.2，修复 Windows DSH Desktop 目录选择器冲突及插件更新时的配置识别，优化「移动访问」侧栏入口的布局、深色模式与键盘操作。[详细记录与致谢](CHANGELOG.md)。
+> **0.3.5 更新**：修复 DSH 在 WebSocket 握手后立即发送较大首批数据时，移动端可能一直停在插件加载界面的问题，局域网与远程连接均适用；现有 0.3.3/0.3.4 App 无需重新配对。[详细记录与致谢](CHANGELOG.md)。
 >
 > **升级提醒**：插件仍在快速迭代，建议与 App 同步更新；DSH 0.1.2-alpha.2 需使用 Mobile 插件 0.3.4 或更高版本。[兼容说明](#兼容性)。
 
 <p align="center">
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.4/dsh-mobile-android-v0.3.4.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile 安卓应用图标" width="72" height="72"></a><br>
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.4/dsh-mobile-android-v0.3.4.apk"><strong>下载 Android App 0.3.4</strong></a><br>
-  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.4">版本说明与校验文件</a></sub>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.5/dsh-mobile-android-v0.3.5.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile 安卓应用图标" width="72" height="72"></a><br>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.5/dsh-mobile-android-v0.3.5.apk"><strong>下载 Android App 0.3.5</strong></a><br>
+  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.5">版本说明与校验文件</a></sub>
 </p>
 
 DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 通过局域网，或可选的 Tailscale Funnel、cpolar、自建 FRP 远程通道连接电脑，继续使用同一份会话、工作区、消息和工具。局域网与远程访问分别启停、分别管理设备，且都不修改 DeepSeek Harness 源码。
@@ -199,10 +199,11 @@ flowchart LR
 
 ## 兼容性
 
-DSH 0.1.2-alpha.2 需搭配 Mobile 插件 0.3.4；DSH 0.1.2-alpha.1 建议搭配插件与 App 0.3.2 或更高版本。0.3.4 插件兼容现有 0.3.3 App，无需重新配对。更早的 App 使用不同的状态栏策略，建议同步升级；App 0.1.3 及更早版本需卸载重装并重新配对。
+DSH 0.1.2-alpha.2 需搭配 Mobile 插件 0.3.4 或更高版本；DSH 0.1.2-alpha.1 建议搭配插件与 App 0.3.2 或更高版本。0.3.5 插件兼容现有 0.3.3/0.3.4 App，无需重新配对；本次 Android App 仅同步版本号，功能行为不变。更早的 App 使用不同的状态栏策略，建议同步升级；App 0.1.3 及更早版本需卸载重装并重新配对。
 
 | DSH Mobile | 已验证的 DeepSeek Harness                                               |
 | ------------ | ------------------------------------------------------------------------- |
+| `0.3.5` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1`、`0.1.2-alpha.2` |
 | `0.3.4` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1`、`0.1.2-alpha.2` |
 | `0.3.3` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1` |
 | `0.3.2`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1` |
