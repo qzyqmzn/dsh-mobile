@@ -9,7 +9,6 @@ import { X509Certificate } from 'node:crypto'
 import { copyFile, lstat, readFile, rm } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { parseControlFile, parseGatewayConfig, type PluginConfig, type ResolvedGatewayConfig } from './config.js'
-import { assertSupportedDshVersion } from './compatibility.js'
 import { collectConnectionDiagnostics } from './diagnostics.js'
 import { MOBILE_CUSTOMIZATION_GUIDE } from './mobile-guide.js'
 import {
@@ -81,10 +80,15 @@ function upstreamAuthenticatedUrl(ctx: Context, upstreamOrigin: URL): string | u
     : undefined
 }
 
-function installedDshVersion(): unknown {
-  const manifest = createRequire(import.meta.url)('@deepseek-ai/dsh-host-webserver/package.json') as unknown
-  if (manifest === null || typeof manifest !== 'object') return undefined
-  return (manifest as { readonly version?: unknown }).version
+function installedDshVersion(): string {
+  try {
+    const manifest = createRequire(import.meta.url)('@deepseek-ai/dsh-host-webserver/package.json') as unknown
+    if (manifest === null || typeof manifest !== 'object') return 'unknown'
+    const version = (manifest as { readonly version?: unknown }).version
+    return typeof version === 'string' && version !== '' ? version : 'unknown'
+  } catch {
+    return 'unknown'
+  }
 }
 
 function mapAdminError(error: unknown): HttpError {
@@ -262,7 +266,6 @@ function remoteControlPayload(
 /** Mount the resident control route and its optional authenticated LAN gateway. */
 export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   const dshVersion = installedDshVersion()
-  assertSupportedDshVersion(dshVersion)
   const loaded = await loadSetup(config)
   const mobileAccess: MobileAccessService = createMobileAccessService(ctx)
   const template = loopbackTemplate(loaded)

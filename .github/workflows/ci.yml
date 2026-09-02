@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24.x
-      - run: node mobile/scripts/check-dsh-compatibility.mjs dsh --contract-only
+      - run: node mobile/scripts/check-dsh-compatibility.mjs dsh
 
   gateway:
     name: Gateway (${{ matrix.os }}, Node ${{ matrix.node }})

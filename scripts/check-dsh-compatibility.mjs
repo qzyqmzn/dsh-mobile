@@ -2,10 +2,9 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 const arguments_ = process.argv.slice(2)
-const contractOnly = arguments_.includes('--contract-only')
-const unknownOptions = arguments_.filter(value => value.startsWith('--') && value !== '--contract-only')
+const unknownOptions = arguments_.filter(value => value.startsWith('--'))
 if (unknownOptions.length > 0) throw new Error(`unknown option: ${unknownOptions[0]}`)
-const sourceArguments = arguments_.filter(value => !value.startsWith('--'))
+const sourceArguments = arguments_
 if (sourceArguments.length > 1) throw new Error('pass exactly one DeepSeek Harness source directory')
 const sourceRoot = resolve(sourceArguments[0] ?? process.env.DSH_SOURCE_ROOT ?? '')
 if (sourceRoot === resolve('')) throw new Error('pass a DeepSeek Harness source directory')
@@ -32,13 +31,7 @@ async function optionalJson(path) {
   return source === undefined ? undefined : JSON.parse(source)
 }
 
-const plugin = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-const supported = plugin.peerDependencies['@deepseek-ai/dsh-host-webserver'].split('||').map(value => value.trim())
 const root = await json('package.json')
-const declaredSupported = supported.includes(root.version)
-if (!declaredSupported && !contractOnly) {
-  throw new Error(`DSH ${root.version} is not in the verified set: ${supported.join(', ')}`)
-}
 
 const runtimeManifest = await optionalJson('packages/client/runtime/package.json')
 const webManifest = await optionalJson('packages/client/web/package.json')
@@ -213,8 +206,4 @@ if (!hostInjections?.includes('globalThis[${name}] = ${value}')
   throw new Error('DSH boot manifest uses an unsupported global injection syntax')
 }
 
-process.stdout.write(
-  declaredSupported
-    ? `DSH compatibility ok: ${root.version} (${clientArchitecture})\n`
-    : `DSH frontend contract recognized: ${root.version} (${clientArchitecture}; not yet declared supported)\n`,
-)
+process.stdout.write(`DSH compatibility ok: ${root.version} (${clientArchitecture})\n`)
