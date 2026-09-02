@@ -62,8 +62,9 @@ export function validateFrpPublicOrigin(value: unknown): string {
   if (typeof value !== 'string' || value.length > 512) throw new Error('frp_public_origin_invalid')
   let url: URL
   try { url = new URL(value) } catch { throw new Error('frp_public_origin_invalid') }
+  const publicHost = url.hostname
   if (url.protocol !== 'https:' || url.port !== '' || url.pathname !== '/' || url.search !== '' || url.hash !== ''
-    || url.username !== '' || url.password !== '' || isIP(url.hostname) !== 0 || !hostname(url.hostname)) {
+    || url.username !== '' || url.password !== '' || (isIP(publicHost) !== 4 && !hostname(publicHost))) {
     throw new Error('frp_public_origin_invalid')
   }
   return url.origin

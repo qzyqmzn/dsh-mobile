@@ -35,6 +35,15 @@ class PairingScanPolicyTest {
     }
 
     @Test
+    fun acceptsAPublicIpv4OnlyFromTheRemoteFlow() {
+        val remote = PairingScanPolicy.parse(pairingLink("203.0.113.10"), AccessMode.REMOTE)
+        val lan = PairingScanPolicy.parse(pairingLink("203.0.113.10"), AccessMode.LAN)
+
+        assertEquals(AccessMode.REMOTE, remote?.mode)
+        assertNull(lan)
+    }
+
+    @Test
     fun rejectsContentThatIsNotAPairingLink() {
         assertNull(PairingScanPolicy.parse("https://192.168.1.20:3443"))
         assertNull(PairingScanPolicy.parse("dsh1.$instanceId.$token"))

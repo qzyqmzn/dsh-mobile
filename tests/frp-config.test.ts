@@ -26,7 +26,8 @@ describe('restricted FRP configuration', () => {
   it('accepts only the fixed single-purpose inputs', () => {
     expect(parseFrpSettings(input)).toEqual({ version: 1, ...input })
     expect(() => parseFrpSettings({ ...input, publicOrigin: 'http://dsh.example.com' })).toThrow('frp_public_origin_invalid')
-    expect(() => parseFrpSettings({ ...input, publicOrigin: 'https://127.0.0.1' })).toThrow('frp_public_origin_invalid')
+    expect(parseFrpSettings({ ...input, publicOrigin: 'https://203.0.113.10' }).publicOrigin).toBe('https://203.0.113.10')
+    expect(() => parseFrpSettings({ ...input, publicOrigin: 'https://[::1]' })).toThrow('frp_public_origin_invalid')
     expect(() => parseFrpSettings({ ...input, token: 'too-short' })).toThrow('frp_token_invalid')
     expect(() => parseFrpSettings({ ...input, localPort: 3080 })).toThrow('frp_settings_invalid')
   })

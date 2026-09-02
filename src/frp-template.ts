@@ -1,6 +1,12 @@
 /** Loopback-only HTTP vhost port used between Caddy and frps. */
 export const FRP_VHOST_HTTP_PORT = 7080
 
+function publicIpv4Address(value: string): boolean {
+  const parts = value.split('.')
+  return parts.length === 4 && parts.every(part => /^(?:0|[1-9][0-9]{0,2})$/u.test(part)
+    && Number(part) <= 255)
+}
+
 function publicDnsHostname(value: string): boolean {
   return value.length <= 253 && value.includes('.') && !/^[0-9.]+$/u.test(value)
     && !value.includes(':') && value.split('.').every(label => label.length >= 1 && label.length <= 63
@@ -16,7 +22,7 @@ export function createRestrictedFrpServerTemplate(serverPort: number, token: str
   let url: URL
   try { url = new URL(publicOrigin) } catch { throw new Error('frp_template_input_invalid') }
   if (url.protocol !== 'https:' || url.port !== '' || url.pathname !== '/' || url.search !== '' || url.hash !== ''
-    || url.username !== '' || url.password !== '' || !publicDnsHostname(url.hostname)) {
+    || url.username !== '' || url.password !== '' || (!publicIpv4Address(url.hostname) && !publicDnsHostname(url.hostname))) {
     throw new Error('frp_template_input_invalid')
   }
   return [

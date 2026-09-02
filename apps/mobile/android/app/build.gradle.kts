@@ -17,6 +17,7 @@ val releaseSigningConfigured = listOf(
 android {
     namespace = "io.github.sayach.dshmobile"
     compileSdk = 36
+    buildToolsVersion = "36.0.0"
 
     defaultConfig {
         applicationId = "io.github.sayach.dshmobile"
