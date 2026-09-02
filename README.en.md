@@ -19,14 +19,14 @@
 
 > DSH Mobile is a DeepSeek Harness community plugin; the native app supports Android only.
 >
-> **0.3.6 update**: remove the exact DSH version allowlist and verify compatibility with 0.1.2-alpha.3/alpha.4. Future releases with compatible interfaces are no longer blocked only because their version is new. [Details](CHANGELOG.md).
+> **0.3.7 update**: fix a Windows DSH Desktop startup crash when capturing system-command output, including the related route-selection and firewall-diagnostic paths. The 0.3.6 DSH version policy and private-file protections remain intact. [Details](CHANGELOG.md).
 >
-> **Upgrade reminder**: use Mobile plugin 0.3.6 or later with DSH 0.1.2-alpha.3/alpha.4. Existing 0.3.3-0.3.5 apps and pairings remain valid. [Compatibility notes](#compatibility).
+> **Upgrade reminder**: Windows DSH Desktop users should update to plugin 0.3.7. Existing 0.3.3-0.3.6 apps and paired devices remain compatible without re-pairing. [Compatibility notes](#compatibility).
 
 <p align="center">
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.6/dsh-mobile-android-v0.3.6.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile Android app icon" width="72" height="72"></a><br>
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.6/dsh-mobile-android-v0.3.6.apk"><strong>Download Android app 0.3.6</strong></a><br>
-  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.6">Release notes and checksums</a></sub>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.7/dsh-mobile-android-v0.3.7.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile Android app icon" width="72" height="72"></a><br>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.7/dsh-mobile-android-v0.3.7.apk"><strong>Download Android app 0.3.7</strong></a><br>
+  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.7">Release notes and checksums</a></sub>
 </p>
 
 DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN or an optional Tailscale Funnel, cpolar, or self-hosted FRP remote path. Local and remote access keep the same sessions, Workspaces, messages, and tools while using separate switches and paired-device stores without modifying DeepSeek Harness source.
