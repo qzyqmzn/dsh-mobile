@@ -26,14 +26,14 @@
 
 > DSH Mobile 是 DeepSeek Harness 社区插件，原生 App 仅支持 Android。
 >
-> **0.3.5 更新**：修复 DSH 在 WebSocket 握手后立即发送较大首批数据时，移动端可能一直停在插件加载界面的问题，局域网与远程连接均适用；现有 0.3.3/0.3.4 App 无需重新配对。[详细记录与致谢](CHANGELOG.md)。
+> **0.3.6 更新**：取消 DSH 精确版本白名单，已验证兼容 0.1.2-alpha.3/alpha.4；今后接口兼容的新版本不会再仅因版本号而阻止插件启动。[详细记录](CHANGELOG.md)。
 >
-> **升级提醒**：插件仍在快速迭代，建议与 App 同步更新；DSH 0.1.2-alpha.2 需使用 Mobile 插件 0.3.4 或更高版本。[兼容说明](#兼容性)。
+> **升级提醒**：DSH 0.1.2-alpha.3/alpha.4 请使用 Mobile 插件 0.3.6 或更高版本；现有 0.3.3-0.3.5 App 与配对无需重建。[兼容说明](#兼容性)。
 
 <p align="center">
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.5/dsh-mobile-android-v0.3.5.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile 安卓应用图标" width="72" height="72"></a><br>
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.5/dsh-mobile-android-v0.3.5.apk"><strong>下载 Android App 0.3.5</strong></a><br>
-  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.5">版本说明与校验文件</a></sub>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.6/dsh-mobile-android-v0.3.6.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile 安卓应用图标" width="72" height="72"></a><br>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.6/dsh-mobile-android-v0.3.6.apk"><strong>下载 Android App 0.3.6</strong></a><br>
+  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.6">版本说明与校验文件</a></sub>
 </p>
 
 DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 通过局域网，或可选的 Tailscale Funnel、cpolar、自建 FRP 远程通道连接电脑，继续使用同一份会话、工作区、消息和工具。局域网与远程访问分别启停、分别管理设备，且都不修改 DeepSeek Harness 源码。
@@ -199,10 +199,11 @@ flowchart LR
 
 ## 兼容性
 
-DSH 0.1.2-alpha.2 需搭配 Mobile 插件 0.3.4 或更高版本；DSH 0.1.2-alpha.1 建议搭配插件与 App 0.3.2 或更高版本。0.3.5 插件兼容现有 0.3.3/0.3.4 App，无需重新配对；本次 Android App 仅同步版本号，功能行为不变。更早的 App 使用不同的状态栏策略，建议同步升级；App 0.1.3 及更早版本需卸载重装并重新配对。
+DSH Mobile 0.3.6 不再按 DSH 精确版本号阻止启动，并已验证 DSH 0.1.2-alpha.3/alpha.4 的移动前端与连接接口。现有 0.3.3-0.3.5 App 无需重新配对；0.3.6 Android App 仅同步版本信息，功能行为不变。更早的 App 使用不同的状态栏策略，建议同步升级；App 0.1.3 及更早版本需卸载重装并重新配对。
 
 | DSH Mobile | 已验证的 DeepSeek Harness                                               |
 | ------------ | ------------------------------------------------------------------------- |
+| `0.3.6` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1` 至 `alpha.4`；未列版本不再仅因版本号被拒绝 |
 | `0.3.5` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1`、`0.1.2-alpha.2` |
 | `0.3.4` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1`、`0.1.2-alpha.2` |
 | `0.3.3` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1` |
@@ -214,7 +215,7 @@ DSH 0.1.2-alpha.2 需搭配 Mobile 插件 0.3.4 或更高版本；DSH 0.1.2-alph
 | `0.2.0`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`                  |
 | `0.1.4`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`                  |
 
-插件启动时会检查 DSH Host 版本和移动布局所需的前端依赖，遇到未经验证的版本会直接报错而不是带病启动；CI 也会持续跟踪 DSH 主分支的布局契约。升级 DSH 后如遇兼容提示，请先升级 DSH Mobile。
+插件不再使用运行时版本白名单；CI 会持续检查 DSH 主分支真实使用的前端、连接与信任接口，只有接口变化才需要适配。未来 DSH 更新若出现实际显示或连接异常，请升级 DSH Mobile 并提交诊断信息。
 
 0.3.4 修复 Windows [DSH Desktop](https://github.com/anywhere-labs/dsh-desktop) 的目录选择器重复注册问题：复用桌面宿主的页面内目录浏览器，普通 Web 启动仍保留手机选择电脑工作区的能力。Desktop 连接手机时需使用兼容模式并启用浏览器访问，Mobile 的上游地址应与 Desktop 的监听端口一致。
 

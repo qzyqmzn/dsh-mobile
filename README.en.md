@@ -19,14 +19,14 @@
 
 > DSH Mobile is a DeepSeek Harness community plugin; the native app supports Android only.
 >
-> **0.3.5 update**: fix a mobile startup hang when DSH sends a large first WebSocket payload immediately after the upgrade response; the fix applies to both LAN and remote access, and existing 0.3.3/0.3.4 apps do not need re-pairing. [Details and acknowledgements](CHANGELOG.md).
+> **0.3.6 update**: remove the exact DSH version allowlist and verify compatibility with 0.1.2-alpha.3/alpha.4. Future releases with compatible interfaces are no longer blocked only because their version is new. [Details](CHANGELOG.md).
 >
-> **Upgrade reminder**: the plugin is evolving rapidly; keep it and the app updated together. DSH 0.1.2-alpha.2 requires Mobile plugin 0.3.4 or later. [Compatibility notes](#compatibility).
+> **Upgrade reminder**: use Mobile plugin 0.3.6 or later with DSH 0.1.2-alpha.3/alpha.4. Existing 0.3.3-0.3.5 apps and pairings remain valid. [Compatibility notes](#compatibility).
 
 <p align="center">
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.5/dsh-mobile-android-v0.3.5.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile Android app icon" width="72" height="72"></a><br>
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.5/dsh-mobile-android-v0.3.5.apk"><strong>Download Android app 0.3.5</strong></a><br>
-  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.5">Release notes and checksums</a></sub>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.6/dsh-mobile-android-v0.3.6.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile Android app icon" width="72" height="72"></a><br>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.6/dsh-mobile-android-v0.3.6.apk"><strong>Download Android app 0.3.6</strong></a><br>
+  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.6">Release notes and checksums</a></sub>
 </p>
 
 DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN or an optional Tailscale Funnel, cpolar, or self-hosted FRP remote path. Local and remote access keep the same sessions, Workspaces, messages, and tools while using separate switches and paired-device stores without modifying DeepSeek Harness source.
@@ -190,10 +190,11 @@ See [SECURITY.md](SECURITY.md).
 
 ## Compatibility
 
-Use Mobile plugin 0.3.4 or later with DSH 0.1.2-alpha.2; plugin and app 0.3.2 or later are recommended for DSH 0.1.2-alpha.1. Plugin 0.3.5 remains compatible with existing 0.3.3/0.3.4 apps without re-pairing; the 0.3.5 Android build changes version metadata only and keeps the same behavior. Earlier apps use a different status-bar strategy, so updating both is recommended. App 0.1.3 or earlier requires reinstalling and pairing again.
+DSH Mobile 0.3.6 no longer blocks startup by exact DSH version and has verified the mobile frontend and connection interfaces in DSH 0.1.2-alpha.3/alpha.4. Existing 0.3.3-0.3.5 apps do not need re-pairing; the 0.3.6 Android build changes version metadata only. Earlier apps use a different status-bar strategy, so updating both is recommended. App 0.1.3 or earlier requires reinstalling and pairing again.
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
+| `0.3.6` | `0.1.0-rc.5`, `rc.6`, `rc.7`, `0.1.1-rc.2`, and `0.1.2-alpha.1` through `alpha.4`; unlisted versions are no longer rejected by version alone |
 | `0.3.5` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1`, `0.1.2-alpha.2` |
 | `0.3.4` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1`, `0.1.2-alpha.2` |
 | `0.3.3` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
@@ -205,7 +206,7 @@ Use Mobile plugin 0.3.4 or later with DSH 0.1.2-alpha.2; plugin and app 0.3.2 or
 | `0.2.0` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
 | `0.1.4` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
 
-At startup, the plugin verifies the DSH Host version and the frontend dependencies required by the mobile layout; an unverified release fails with a clear error instead of serving a broken page. CI also tracks the DSH main branch layout contract. If a DSH upgrade reports an incompatibility, update DSH Mobile first.
+The plugin no longer uses a runtime version allowlist. CI continuously checks the frontend, connection, and trust interfaces used from the DSH main branch, so adaptation is required only when those interfaces actually change. If a future DSH update causes a real display or connection failure, update DSH Mobile and include diagnostics in the report.
 
 0.3.4 fixes duplicate directory-picker registration in Windows [DSH Desktop](https://github.com/anywhere-labs/dsh-desktop). It reuses the desktop host's in-page directory browser; standalone Web launches still let phones select workspaces on the computer. Mobile access through Desktop requires compatibility mode and browser access enabled, with Mobile's upstream address matching Desktop's listening port.
 

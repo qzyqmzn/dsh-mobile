@@ -60,7 +60,7 @@ function sourceFixture(version = '0.1.2-alpha.2', architecture: 'renderer-v2' | 
   return sources
 }
 
-async function check(sources: Record<string, string>, contractOnly = false): Promise<{ status: number | null; output: string }> {
+async function check(sources: Record<string, string>): Promise<{ status: number | null; output: string }> {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-contract-'))
   temporaryDirectories.push(directory)
   for (const [relative, source] of Object.entries(sources)) {
@@ -68,7 +68,7 @@ async function check(sources: Record<string, string>, contractOnly = false): Pro
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, source)
   }
-  const result = spawnSync(process.execPath, [checker, directory, ...(contractOnly ? ['--contract-only'] : [])], {
+  const result = spawnSync(process.execPath, [checker, directory], {
     encoding: 'utf8', timeout: 5_000, windowsHide: true,
   })
   if (result.error) throw result.error
@@ -84,6 +84,9 @@ describe('DSH source compatibility gate', () => {
     ['0.1.0-rc.7', 'runtime-v1', false],
     ['0.1.2-alpha.1', 'renderer-v2', false],
     ['0.1.2-alpha.2', 'renderer-v2', true],
+    ['0.1.2-alpha.3', 'renderer-v2', true],
+    ['0.1.2-alpha.4', 'renderer-v2', true],
+    ['0.1.99-alpha.1', 'renderer-v2', true],
   ] as const)('recognizes %s %s settings trust dependencies', async (version, architecture, remoteTrust) => {
     const result = await check(sourceFixture(version, architecture, remoteTrust))
     expect(result.output).toContain(`DSH compatibility ok: ${version} (${architecture})`)
@@ -129,12 +132,11 @@ describe('DSH source compatibility gate', () => {
     expect(result.output).toContain('direct trust requires the Connection module')
   })
 
-  it('does not let contract-only mode bypass trust dependency checks', async () => {
-    const sources = sourceFixture('0.1.2-alpha.3')
-    expect((await check(sources)).output).toContain('not in the verified set')
-    expect((await check(sources, true)).status).toBe(0)
-    sources['packages/api/remotes/package.json'] = manifest('0.1.2-alpha.3', [])
-    const result = await check(sources, true)
+  it('accepts a new version only while its trust dependencies remain compatible', async () => {
+    const sources = sourceFixture('0.1.99-alpha.1')
+    expect((await check(sources)).status).toBe(0)
+    sources['packages/api/remotes/package.json'] = manifest('0.1.99-alpha.1', [])
+    const result = await check(sources)
     expect(result.status).toBe(1)
     expect(result.output).toContain('Remote assembly trust dependency changed')
   })
