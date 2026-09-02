@@ -1,9 +1,8 @@
 #!/usr/bin/env node
-import { execFile as execFileCallback } from 'node:child_process'
+import { execFileText as execFile } from './exec-file.js'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { promisify } from 'node:util'
 import {
   ensureManagedCa,
   preferredLanInterfaceNames,
@@ -21,7 +20,6 @@ interface SetupOptions {
   readonly configureFirewall: boolean
 }
 
-const execFile = promisify(execFileCallback)
 const FIREWALL_TCP_RULE = 'DSH Mobile HTTPS'
 const FIREWALL_UDP_RULE = 'DSH Mobile Discovery'
 

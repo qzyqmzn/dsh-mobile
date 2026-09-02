@@ -1,10 +1,8 @@
-import { execFile as execFileCallback } from 'node:child_process'
+import { execFileText as execFile } from './exec-file.js'
 import { lookup } from 'node:dns/promises'
-import { promisify } from 'node:util'
 import type { RemoteProvider } from './remote.js'
 import { DSH_MOBILE_VERSION, MINIMUM_ANDROID_APP_VERSION } from './version.js'
 
-const execFile = promisify(execFileCallback)
 
 export type DiagnosticStatus = 'ok' | 'warning' | 'error' | 'info'
 export type DiagnosticReason =

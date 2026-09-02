@@ -3,11 +3,10 @@ import {
   createPrivateKey,
   createPublicKey,
 } from 'node:crypto'
-import { execFile as execFileCallback } from 'node:child_process'
+import { execFileText as execFile } from './exec-file.js'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { promisify } from 'node:util'
 import { generate } from 'selfsigned'
 import { restrictPrivateFile } from './private-file.js'
 
@@ -36,7 +35,6 @@ export interface ManagedSetup {
 type InterfaceTable = NodeJS.Dict<NetworkInterfaceInfo[]>
 type RouteCommand = (file: string, args: readonly string[]) => Promise<string>
 
-const execFile = promisify(execFileCallback)
 const VIRTUAL_INTERFACE_MARKERS = [
   'bridge', 'docker', 'hyper-v', 'mihomo', 'radmin', 'tailscale', 'tap', 'tun',
   'utun', 'vbox', 'veth', 'virtual', 'vmware', 'vpn', 'vethernet', 'wsl', 'zerotier',
