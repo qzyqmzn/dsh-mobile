@@ -2,6 +2,13 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## Unreleased (self-hosted FRP deployment flow, planned for 0.4.0)
+
+- Add VPS automatic deployment, host-key confirmation, and server cleanup to the self-hosted FRP provider, without modifying DeepSeek Harness. Thanks @qzyqmzn for the deployment flow this release hardens and proves against a real VPS.
+- Require globally routable public origins and VPS targets; documentation, private, and reserved IPv4 literals are rejected before any network access.
+- Pin SSH server identity with user-confirmed fingerprints, re-verify before destructive steps, and keep `StrictHostKeyChecking=yes` on every channel.
+- Keep existing Caddy content intact through an import-only wiring; uninstall removes just the owned snippet, import line, services, files, and deployment-created account.
+
 ## 0.3.8 - 2026-09-03
 
 - Preserve the WeChat Mini-Program compatibility changes contributed in PR #34 by @StrawberryAO while deriving an unset upstream from the active DSH WebServer port. Standalone Web defaults, Desktop's configured port, and Desktop's bind-conflict retry port therefore use the same proxy target.

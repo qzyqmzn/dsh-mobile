@@ -91,6 +91,48 @@ export function parseFrpSettings(value: unknown): FrpSettings {
   })
 }
 
+/**
+ * Merge a partial VPS request body with the saved configuration so a blank
+ * field keeps its saved value ("已保存时可留空"). Every merged field is still
+ * validated; with nothing saved and nothing supplied the result reports a
+ * missing configuration instead of silently deploying blanks.
+ */
+export function mergeSavedFrpSettings(
+  partial: Readonly<Record<string, unknown>>,
+  saved: FrpSettings | undefined,
+): FrpSettings {
+  const merged = {
+    serverAddress: partial.serverAddress === '' || partial.serverAddress === undefined
+      ? saved?.serverAddress : partial.serverAddress,
+    serverPort: typeof partial.serverPort === 'number' && Number.isSafeInteger(partial.serverPort) && partial.serverPort >= 1
+      ? partial.serverPort : saved?.serverPort,
+    token: partial.token === '' || partial.token === undefined ? saved?.token : partial.token,
+    publicOrigin: partial.publicOrigin === '' || partial.publicOrigin === undefined
+      ? saved?.publicOrigin : partial.publicOrigin,
+  }
+  if (merged.serverAddress === undefined && merged.serverPort === undefined
+    && merged.token === undefined && merged.publicOrigin === undefined) {
+    throw new Error('frp_config_missing')
+  }
+  return parseFrpSettings(merged)
+}
+
+/** Merge a VPS target (address and control port) with the saved configuration. */
+export function mergeSavedFrpTarget(
+  partial: Readonly<Record<string, unknown>>,
+  saved: FrpSettings | undefined,
+): { readonly serverAddress: string; readonly serverPort: number } {
+  const serverAddress = partial.serverAddress === '' || partial.serverAddress === undefined
+    ? saved?.serverAddress : partial.serverAddress
+  const serverPort = typeof partial.serverPort === 'number' && Number.isSafeInteger(partial.serverPort) && partial.serverPort >= 1
+    ? partial.serverPort : saved?.serverPort
+  if (serverAddress === undefined || serverPort === undefined) throw new Error('frp_config_missing')
+  return Object.freeze({
+    serverAddress: validateFrpServerAddress(serverAddress),
+    serverPort: validateFrpServerPort(serverPort),
+  })
+}
+
 function tomlString(value: string): string {
   return JSON.stringify(value)
 }

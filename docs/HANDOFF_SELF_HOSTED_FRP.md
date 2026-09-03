@@ -4,9 +4,10 @@
 
 ## 代码地图
 
-- `src/frp-config.ts`：配置校验与持久化。`validateFrpPublicOrigin` 要求 IPv4 入口全局可路由（文档/私网/保留地址拒绝）；`serverAddress` 保持宽松以兼容本地回环测试，VPS 操作另行收紧。
+- `src/frp-config.ts`：配置校验与持久化。`validateFrpPublicOrigin` 要求 IPv4 入口全局可路由（文档/私网/保留地址拒绝）；`serverAddress` 保持宽松以兼容本地回环测试，VPS 操作另行收紧。`mergeSavedFrpSettings`/`mergeSavedFrpTarget` 让空白字段沿用已保存配置（面板“已保存时可留空”）。
+- `src/frp-template.ts`：`createCaddySite` 片段构建器（自动/手动共用）、手动 IPv4 证书指引、`import` 行常量。手动模板与自动部署内容同源。
 - `src/network.ts`：`isGloballyRoutableIpv4`（IANA 特殊用途全表，含 TEST-NET-1/2/3），与 Android `RemoteHostPolicy` 保持同表。任一侧改表必须同步另一侧与双方测试。
-- `src/vps-deploy.ts`：`fetchVpsHostKeys`（ssh-keyscan + SHA256 指纹）、`buildPinnedKnownHosts`（已确认集合全包含才放行）、`deployVps`/`uninstallVps`（部署前/清理前重新扫描并全量核对，SSH/SCP 全程 `StrictHostKeyChecking=yes` + 临时 known_hosts）、`createVpsUninstallScript`（只删自有产物）。
+- `src/vps-deploy.ts`：`fetchVpsHostKeys`（keyscan → Git 版 keyscan → 认证直读的三级扫描，同一确认管线）、`buildPinnedKnownHosts`（已确认集合全包含才放行）、`validateVpsServerTarget`（所有 VPS 操作共用：禁 IPv6 与非公网目标）、`deployVps`/`uninstallVps`（部署前/清理前重新扫描并全量核对，SSH/SCP 全程 `StrictHostKeyChecking=yes` + 临时 known_hosts + 保活）、`createVpsUninstallScript`（只删自有产物；Caddy 只删 snippet 与 import 行，用户内容不动；账户凭 `.owns-account` 标记删除）。
 - `src/plugin.ts`：`vps/host-keys`、`vps/deploy`、`vps/uninstall-script`、`vps/uninstall` 四个回环管理路由；日志只记指纹与计数，不记密钥与 Token。
 - `src/client.ts` + `src/client-messages.ts`（en/it/zh）：变更清单展示、指纹确认对话框、卸载入口。三语 key 必须对齐（translator 有英文 fallback，但 CI 期待完整翻译）。
 - Android `RemoteHostPolicy.kt` + `RemoteHostPolicyTest.kt` + `PairingScanPolicyTest.kt`：远程入口识别。
@@ -17,6 +18,8 @@
 - `vps_host_key_mismatch`：服务器当前密钥不在已确认集合（轮换/替换/多余密钥，fail-closed）。
 - `vps_host_key_unavailable` / `vps_host_key_invalid`：keyscan 无输出或输出不可解析。
 - `vps_server_not_public`：SSH 目标是回环/私网/文档 IPv4（网络碰触前拒绝）。
+- `vps_ipv6_ssh_not_supported`：SSH 目标是 IPv6（所有 VPS 操作共用校验）。
+- `frp_config_missing`：无已保存配置且请求字段空白。
 - `vps_uninstall_failed`：清理脚本未回 `DSH_MOBILE_UNINSTALL_OK`。
 
 ## 验证

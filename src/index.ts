@@ -83,13 +83,22 @@ export {
   FrpConfigStore,
   createFrpServerTemplate,
   createFrpcToml,
+  mergeSavedFrpSettings,
+  mergeSavedFrpTarget,
   parseFrpSettings,
   validateFrpPublicOrigin,
   validateFrpServerAddress,
   validateFrpServerPort,
   validateFrpToken,
 } from './frp-config.js'
-export { createRestrictedFrpServerTemplate, FRP_VHOST_HTTP_PORT } from './frp-template.js'
+export {
+  FRP_CADDY_IMPORT_LINE,
+  FRP_CADDY_SNIPPET_MARKER,
+  FRP_CADDY_SNIPPET_PATH,
+  createCaddySite,
+  createRestrictedFrpServerTemplate,
+  FRP_VHOST_HTTP_PORT,
+} from './frp-template.js'
 export type { FrpConfigurationStatus, FrpSettings } from './frp-config.js'
 export { FrpController } from './frp.js'
 export type { FrpControllerOptions, FrpState, FrpStatus } from './frp.js'

@@ -35,7 +35,7 @@ import { FunnelController, funnelExecutable } from './funnel.js'
 import { CpolarController } from './cpolar.js'
 import { CpolarComponentManager, type CpolarComponentStatus } from './cpolar-component.js'
 import { FrpComponentManager, type FrpComponentStatus } from './frp-component.js'
-import { FrpConfigStore, parseFrpSettings, type FrpConfigurationStatus } from './frp-config.js'
+import { FrpConfigStore, mergeSavedFrpSettings, mergeSavedFrpTarget, type FrpConfigurationStatus } from './frp-config.js'
 import { FrpController } from './frp.js'
 import { PluginReleaseManager, releaseProfileDirectory } from './release-update.js'
 import { installMobileFileLogger } from './file-logger.js'
@@ -583,12 +583,8 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
             String(body.serverAddress), Number(body.serverPort), String(body.sshUser), Number(body.sshPort), body.sshKeyPath === undefined ? 'false' : 'true',
             Array.isArray(body.hostFingerprints) ? String(body.hostFingerprints.length) : 'none')
           const deployment = await remoteProviders.mutate(async () => {
-            const settings = parseFrpSettings({
-              serverAddress: body.serverAddress,
-              serverPort: body.serverPort,
-              token: body.token,
-              publicOrigin: body.publicOrigin,
-            })
+            // Blank fields keep their saved values so a saved token can stay empty.
+            const settings = mergeSavedFrpSettings(body, frpConfig.settings())
             const result = await deployVps(settings, parseVpsDeploymentInput({
               sshUser: body.sshUser,
               sshPort: body.sshPort,
@@ -606,8 +602,9 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
         }
         if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/frp/vps/uninstall-script`) {
           const body = await readJsonObject(request, 4096)
+          const savedTarget = mergeSavedFrpTarget(body, frpConfig.settings())
           const script = createVpsUninstallScript({
-            serverPort: body.serverPort,
+            serverPort: savedTarget.serverPort,
             ...(body.certName === undefined || body.certName === '' ? {} : { certName: body.certName }),
           })
           sendJson(response, 200, { ...remotePayload(), vpsUninstallScript: script }, false)
@@ -619,8 +616,9 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
           logger.info('vps uninstall requested host=%s sshUser=%s sshPort=%d',
             String(body.serverAddress), String(body.sshUser), Number(body.sshPort))
           const removal = await remoteProviders.mutate(async () => {
-            const result = await uninstallVps(String(body.serverAddress), {
-              serverPort: body.serverPort,
+            const savedTarget = mergeSavedFrpTarget(body, frpConfig.settings())
+            const result = await uninstallVps(savedTarget.serverAddress, {
+              serverPort: savedTarget.serverPort,
               ...(body.certName === undefined || body.certName === '' ? {} : { certName: body.certName }),
             }, parseVpsDeploymentInput({
               sshUser: body.sshUser,

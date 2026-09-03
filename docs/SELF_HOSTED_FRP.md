@@ -20,10 +20,10 @@
 
 ## 手动部署 vs 自动部署
 
-- **手动部署**：在面板复制受限模板（frps.toml + Caddyfile），自己到 VPS 上应用。复制操作本身不改变任何东西。
+- **手动部署**：在面板复制受限模板，把 frps 部分存为 `/etc/dsh-mobile/frps.toml`，把 Caddy 片段存为 `/etc/caddy/dsh-mobile-dsh.caddy`，并确保主 Caddyfile 里有且仅需这一行：`import /etc/caddy/dsh-mobile-dsh.caddy`（没有 Caddyfile 就新建一个只写这一行）。复制操作本身不改变任何东西。公网 IPv4 还需要按模板里的注释步骤用 Certbot 申请一次 IP 证书（Caddy 自己签发不了 IP 证书）；域名模式 Caddy 全自动。
 - **自动部署**：填写 SSH 用户、端口和本机私钥路径（留空则用 ssh-agent 或 SSH 配置），点击一键部署。要求 Ubuntu/Debian + systemd，只接受密钥登录，不接受密码。
 
-点部署按钮前，面板会列出自动部署将在 VPS 上做的全部改动：从官方 APT 源安装 Caddy、安装 Python venv 与 Certbot、创建 `dsh-mobile` 系统用户与 frps 配置/服务、Caddy 站点与证书续期定时器、在 UFW 放行 FRP 控制端口与 80/443。**已有非空 Caddy 配置不会被覆盖**，部署会直接停止并保留原配置。
+点部署按钮前，面板会列出自动部署将在 VPS 上做的全部改动：从官方 APT 源安装 Caddy、安装 Python venv 与 Certbot、创建 `dsh-mobile` 系统用户（已存在则复用，卸载时保留）、frps 配置与服务、Caddy 片段加主文件里的一行 import、证书续期定时器、在 UFW 放行 FRP 控制端口与 80/443。**主 Caddyfile 里你自己的内容永远不会被改写或合并**：没有 Caddyfile、空文件或官方默认文件时才写入这一行 import；其他情况部署直接停止并告诉你手动加这一行。
 
 ## 主机指纹核对（每次必做）
 
@@ -39,7 +39,7 @@ SSH 用户、端口和私钥路径只保存在当前浏览器的 `localStorage`�
 
 本机“彻底移除 FRP”只删除电脑端的 frpc、Token 与配置，不动 VPS。清理 VPS 有两种方式，都只删除 DSH Mobile 明确拥有的文件、服务与带标记的防火墙规则：
 
-1. **复制卸载脚本**：点“复制 VPS 卸载脚本”，审阅后以 root 身份在 VPS 上执行。脚本会停用并删除 frps 服务与证书续期定时器、删除配置/二进制/证书文件、清空 DSH Mobile 管理的 Caddy 站点（非 DSH Mobile 管理的 Caddyfile 原样保留）、删除带 DSH Mobile 标记的 UFW 规则、删除 `dsh-mobile` 系统用户（有残留进程时会保留并报错）。
+1. **复制卸载脚本**：点“复制 VPS 卸载脚本”，审阅后以 root 身份在 VPS 上执行。脚本会停用并删除 frps 服务与证书续期定时器、删除配置/二进制/证书文件与 Caddy 片段、从主 Caddyfile 里删掉那一行 import（你自己的内容原样保留；文件删空时留一句占位注释）、删除带 DSH Mobile 标记的 UFW 规则。只有本次部署创建的 `dsh-mobile` 系统用户才会被删除，之前就存在的会被保留并明确告知。
 2. **一键清理**：点“清理 VPS 上的 DSH Mobile”，同样先核对主机指纹，确认后通过 pinned SSH 执行同样的脚本。
 
 公网 IPv4 模式还会删除对应的 Let's Encrypt IP 证书（域名模式的证书由 Caddy 自动管理，无需处理）。
@@ -69,7 +69,7 @@ curl -vk https://PUBLIC_HOST/
 
 - [x] Ubuntu IP 模式：已部署 VPS 上一键重部署 → 公网 IP 就绪 → App 级 discovery 返回当前电脑（2026-09-03，腾讯云实测）。
 - [ ] Ubuntu 域名模式：全新 VPS 一键部署 → 公网域名就绪 → App 远程配对 → 收发消息。
-- [ ] 既有 Caddy 拒绝：在已有非空 Caddyfile 的 VPS 上部署，确认部署中止且原文件未动。
+- [ ] 既有 Caddy 拒绝：在已有自有内容的 Caddyfile 的 VPS 上部署，确认部署中止、原文件未动（连 import 行都不加）。
 - [x] 指纹变更中止：未确认密钥集合部署/清理直接 `vps_host_key_mismatch` 中止且零网络碰触（单元测试锁定；真机指纹全量核对通过）。
 - [x] 一键清理：部署后执行一键清理，服务、文件、定时器、标记防火墙规则、系统用户、LE 证书均已移除，自有 Caddy 本体保留（2026-09-03，腾讯云实测）。
 - [x] 卸载脚本审阅：仅触碰 DSH Mobile 拥有的路径与规则（单元测试断言 + 真机复核）。

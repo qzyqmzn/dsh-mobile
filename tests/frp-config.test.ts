@@ -6,6 +6,8 @@ import {
   FrpConfigStore,
   createFrpServerTemplate,
   createFrpcToml,
+  mergeSavedFrpSettings,
+  mergeSavedFrpTarget,
   parseFrpSettings,
 } from '../src/frp-config.js'
 
@@ -40,6 +42,22 @@ describe('restricted FRP configuration', () => {
     expect(() => parseFrpSettings({ ...input, localPort: 3080 })).toThrow('frp_settings_invalid')
   })
 
+  it('merges blank VPS fields with the saved configuration', () => {
+    const saved = parseFrpSettings(input)
+    expect(mergeSavedFrpSettings({ ...input }, saved)).toEqual({ version: 1, ...input })
+    expect(mergeSavedFrpSettings({ serverAddress: '', serverPort: Number.NaN, token: '', publicOrigin: '' }, saved))
+      .toEqual({ version: 1, ...input })
+    expect(mergeSavedFrpSettings({ ...input, token: 'fedcba9876543210fedcba9876543210' }, saved).token)
+      .toBe('fedcba9876543210fedcba9876543210')
+    expect(() => mergeSavedFrpSettings({ serverAddress: '', token: '' }, undefined)).toThrow('frp_config_missing')
+    expect(() => mergeSavedFrpSettings({ ...input, publicOrigin: 'https://203.0.113.10' }, saved))
+      .toThrow('frp_public_origin_invalid')
+    expect(mergeSavedFrpTarget({ serverAddress: '', serverPort: 0 }, saved)).toEqual({
+      serverAddress: input.serverAddress, serverPort: input.serverPort,
+    })
+    expect(() => mergeSavedFrpTarget({}, undefined)).toThrow('frp_config_missing')
+  })
+
   it('generates one encrypted HTTP vhost and a loopback-only server template', () => {
     const settings = parseFrpSettings(input)
     const client = createFrpcToml(settings, 42123)
@@ -54,6 +72,20 @@ describe('restricted FRP configuration', () => {
     expect(server).toContain('proxyBindAddr = "127.0.0.1"')
     expect(server).toContain('vhostHTTPPort = 7080')
     expect(server).toContain('reverse_proxy 127.0.0.1:7080')
+    // The manual site ships as an importable snippet so later cleanup can
+    // remove exactly this block without touching user Caddy content.
+    expect(server).toContain('/etc/caddy/dsh-mobile-dsh.caddy')
+    expect(server).toContain('import /etc/caddy/dsh-mobile-dsh.caddy')
+  })
+
+  it('guides manual public-IPv4 deployments to a trusted certificate', () => {
+    const settings = parseFrpSettings({ ...input, serverAddress: '1.2.3.4', publicOrigin: 'https://1.2.3.4' })
+    const server = createFrpServerTemplate(settings)
+    expect(server).toContain('tls /var/lib/caddy/dsh-mobile-certs/fullchain.pem')
+    expect(server).toContain('certbot certonly --standalone')
+    expect(server).toContain('--ip-address 1.2.3.4')
+    const domain = createFrpServerTemplate(parseFrpSettings(input))
+    expect(domain).not.toContain('certbot')
   })
 
   it('keeps the token private and removes all owned configuration', async () => {

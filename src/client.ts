@@ -1014,10 +1014,31 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   }
   const validVpsDeploymentForm = (): boolean => {
     const sshPort = Number(vpsSshPort.value)
-    return validFrpForm(frpForm())
+    return validVpsFrpForm()
       && validVpsSshUser(String(vpsSshUser.value ?? '').trim())
       && Number.isSafeInteger(sshPort) && sshPort >= 1 && sshPort <= 65_535
       && validVpsSshKey(String(vpsSshKey.value ?? '').trim())
+  }
+  /**
+   * VPS actions accept blank connection fields when a configuration is already
+   * saved; blanks keep their saved values ("已保存时可留空"). The token itself
+   * is never readable here, so a blank token is merged server-side while the
+   * remaining fields still pass the regular template check.
+   */
+  const vpsEffectiveForm = (): ReturnType<typeof frpForm> => {
+    const form = frpForm()
+    if (!frpConfigured) return form
+    return {
+      serverAddress: form.serverAddress === '' ? configuredFrpServer : form.serverAddress,
+      serverPort: Number.isSafeInteger(form.serverPort) && form.serverPort >= 1 ? form.serverPort : configuredFrpPort,
+      token: form.token,
+      publicOrigin: form.publicOrigin === '' ? configuredFrpOrigin : form.publicOrigin,
+    }
+  }
+  const validVpsFrpForm = (): boolean => {
+    const form = vpsEffectiveForm()
+    const token = form.token === '' && frpConfigured ? '0123456789abcdef' : form.token
+    return validFrpForm({ ...form, token })
   }
   const refreshVpsDeployButton = (): void => {
     const disabled = remoteProviderBusy || !validVpsDeploymentForm()
@@ -1050,8 +1071,8 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   }
   vpsDeploy.addEventListener('click', () => {
     if (remoteProviderBusy) return
-    const form = frpForm()
-    if (!validFrpForm(form)) {
+    const form = vpsEffectiveForm()
+    if (!validVpsFrpForm()) {
       vpsDeployStatus.textContent = t('vpsDeployNotReady')
       return
     }
@@ -1120,8 +1141,8 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   }
   vpsCopyUninstall.addEventListener('click', () => {
     if (remoteProviderBusy) return
-    const form = frpForm()
-    if (!validFrpForm(form)) {
+    const form = vpsEffectiveForm()
+    if (!validVpsFrpForm()) {
       vpsDeployStatus.textContent = t('vpsDeployNotReady')
       return
     }
@@ -1143,8 +1164,8 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   })
   vpsUninstall.addEventListener('click', () => {
     if (remoteProviderBusy) return
-    const form = frpForm()
-    if (!validFrpForm(form)) {
+    const form = vpsEffectiveForm()
+    if (!validVpsFrpForm()) {
       vpsDeployStatus.textContent = t('vpsDeployNotReady')
       return
     }

@@ -5,6 +5,12 @@ import { isIP } from 'node:net'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { validateFrpPublicOrigin, validateFrpServerAddress, validateFrpServerPort, validateFrpToken, type FrpSettings } from './frp-config.js'
+import {
+  FRP_CADDY_IMPORT_LINE,
+  FRP_CADDY_SNIPPET_MARKER,
+  FRP_CADDY_SNIPPET_PATH,
+  createCaddySite,
+} from './frp-template.js'
 import { isGloballyRoutableIpv4 } from './network.js'
 
 const FRP_VERSION = '0.70.1'
@@ -82,6 +88,18 @@ function assertPublicSshTarget(serverAddress: string): void {
   if (isIP(serverAddress) === 4 && !isGloballyRoutableIpv4(serverAddress)) {
     throw new Error('vps_server_not_public')
   }
+}
+
+/**
+ * Validate a VPS address for every operation that opens a network connection
+ * to it (scan, deploy, cleanup). IPv6 is unsupported by the SSH flow and
+ * loopback/private targets are never valid VPS endpoints.
+ */
+function validateVpsServerTarget(serverAddress: string): string {
+  const address = validateFrpServerAddress(serverAddress)
+  if (isIP(address) !== 0 && address.includes(':')) throw new Error('vps_ipv6_ssh_not_supported')
+  assertPublicSshTarget(address)
+  return address
 }
 
 function validSshUser(value: unknown): string {
@@ -203,15 +221,15 @@ async function defaultRunKeyscan(input: { readonly sshUser: unknown; readonly ss
   const args = ['-T', '10', '-p', String(input.sshPort), '-t', 'rsa,ecdsa,ed25519', serverAddress]
   const first = await runProcess(keyscan, args, undefined, 30_000).catch(() => undefined)
   if (first !== undefined && tryParseKeyscanOutput(first.stdout)?.length) return first.stdout
-  // Old Windows keyscan binaries fail KEX against modern servers; retry with the
-  // Git for Windows copy when present before reporting unavailability.
+  // Old keyscan binaries fail KEX against modern servers (non-zero exit, no
+  // keys); retry with the Git for Windows copy when present before giving up.
+  // An empty result lets the caller fall back to an authenticated read.
   const bundled = await gitBundledKeyscan()
   if (bundled !== undefined) {
     const second = await runProcess(bundled, args, undefined, 30_000).catch(() => undefined)
     if (second !== undefined && tryParseKeyscanOutput(second.stdout)?.length) return second.stdout
   }
-  if (first === undefined) throw new VpsSshError('vps_host_key_unavailable', '', 'ssh-keyscan did not run')
-  return first.stdout
+  return first?.stdout ?? ''
 }
 
 export interface VpsSshFetchInput {
@@ -260,7 +278,9 @@ async function scanHostKeys(
   options: VpsDeploymentOptions,
 ): Promise<string> {
   const runKeyscan = options.runKeyscan ?? defaultRunKeyscan
-  const scanned = await runKeyscan({ sshUser: input.sshUser, sshPort: input.sshPort }, serverAddress)
+  // A rejecting keyscan (old binary failing KEX, missing binary, DNS error)
+  // is equivalent to an empty scan: fall through to the authenticated read.
+  const scanned = await runKeyscan({ sshUser: input.sshUser, sshPort: input.sshPort }, serverAddress).catch(() => '')
   if (tryParseKeyscanOutput(scanned)?.length) return scanned
   options.log?.('host-keys-keyscan-empty', { serverAddress })
   const runSshFetch = options.runSshFetch ?? defaultRunSshFetch
@@ -282,8 +302,7 @@ export async function fetchVpsHostKeys(
   input: VpsSshFetchInput,
   options: VpsDeploymentOptions = {},
 ): Promise<readonly VpsHostKey[]> {
-  const address = validateFrpServerAddress(serverAddress)
-  assertPublicSshTarget(address)
+  const address = validateVpsServerTarget(serverAddress)
   const sshUser = validSshUser(input.sshUser)
   const sshPort = validSshPort(input.sshPort)
   const output = await scanHostKeys({ sshUser, sshPort, sshKeyPath: input.sshKeyPath }, address, options)
@@ -358,9 +377,10 @@ function deploymentScript(settings: FrpSettings): string {
   ].join('\n')
   const publicHost = new URL(settings.publicOrigin).hostname
   const publicIp = isGloballyRoutableIpv4(publicHost)
-  const caddy = publicIp
-    ? `# Managed by DSH Mobile\n{\n  default_sni ${publicHost}\n}\n\nhttp://${publicHost} {\n  redir https://${publicHost}{uri} permanent\n}\n\nhttps://${publicHost} {\n  tls /var/lib/caddy/dsh-mobile-certs/fullchain.pem /var/lib/caddy/dsh-mobile-certs/privkey.pem\n  reverse_proxy 127.0.0.1:7080\n}\n`
-    : `# Managed by DSH Mobile\n${publicHost} {\n  reverse_proxy 127.0.0.1:7080\n}\n`
+  // The site content is shared with the manual template; only the wiring
+  // (snippet file + one import line) differs.
+  const caddySite = createCaddySite(publicHost)
+  const caddySnippet = `${FRP_CADDY_SNIPPET_MARKER}\n${caddySite.trimEnd()}\n`
   const ipCertificateSetup = publicIp ? `
 export DEBIAN_FRONTEND=noninteractive
 apt-get install -y python3-venv
@@ -437,10 +457,7 @@ if command -v ss >/dev/null 2>&1 && ss -ltnH | awk '{print $4}' | grep -Eq '(^|:
   systemctl is-active --quiet dsh-mobile-frps.service || fail "端口 ${String(settings.serverPort)} 已被占用。"
 fi
 
-caddy_preexisting=false
-if command -v caddy >/dev/null 2>&1; then
-  caddy_preexisting=true
-else
+if ! command -v caddy >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   # A previous interrupted run may have left these files unreadable because
   # the deployment uses umask 077. APT reads repositories as the _apt user.
@@ -456,21 +473,42 @@ else
 fi
 check caddy ok "Caddy 已安装。"
 
-if [ "$caddy_preexisting" = true ] && [ -e /etc/caddy/Caddyfile ] && grep -vE '^[[:space:]]*(#|$)' /etc/caddy/Caddyfile | grep -q .; then
-  caddy_default=false
+# The site lives in our own snippet file; the main Caddyfile only gains one
+# import line, so existing user content is never rewritten or merged.
+caddy_import='${FRP_CADDY_IMPORT_LINE}'
+install -d -m 0755 /etc/caddy
+caddyfile_ready=false
+if [ ! -e /etc/caddy/Caddyfile ]; then
+  printf '%s\n' "$caddy_import" > /etc/caddy/Caddyfile
+  chmod 0644 /etc/caddy/Caddyfile
+  caddyfile_ready=true
+elif grep -Eq '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile; then
+  caddyfile_ready=true
+elif [ ! -s /etc/caddy/Caddyfile ]; then
+  printf '%s\n' "$caddy_import" > /etc/caddy/Caddyfile
+  chmod 0644 /etc/caddy/Caddyfile
+  caddyfile_ready=true
+else
   caddy_hash="$(sha256sum /etc/caddy/Caddyfile | awk '{print $1}')"
   if [ "$caddy_hash" = '66177d46fa761acb07208065db9b0274cb1b12c02ac43b9bfc9857b698b1ccfe' ]; then
-    caddy_default=true
+    printf '%s\n' "$caddy_import" > /etc/caddy/Caddyfile
+    chmod 0644 /etc/caddy/Caddyfile
+    caddyfile_ready=true
   elif grep -q '^# Managed by DSH Mobile$' /etc/caddy/Caddyfile; then
-    caddy_default=true
+    # Legacy whole-file layout: the entire file is ours by construction.
+    printf '%s\n' "$caddy_import" > /etc/caddy/Caddyfile
+    chmod 0644 /etc/caddy/Caddyfile
+    caddyfile_ready=true
   elif grep -q '^:80[[:space:]]*{' /etc/caddy/Caddyfile \
     && grep -q 'root [*] /usr/share/caddy' /etc/caddy/Caddyfile \
     && grep -q '^[[:space:]]*file_server[[:space:]]*$' /etc/caddy/Caddyfile; then
-    caddy_default=true
+    printf '%s\n' "$caddy_import" > /etc/caddy/Caddyfile
+    chmod 0644 /etc/caddy/Caddyfile
+    caddyfile_ready=true
   fi
-  if [ "$caddy_default" != true ]; then
-    fail "已有 Caddyfile，未覆盖现有配置；请先备份并清理冲突，或手动合并站点。"
-  fi
+fi
+if [ "$caddyfile_ready" != true ]; then
+  fail "已有 Caddyfile，请先备份，然后加一行 ${FRP_CADDY_IMPORT_LINE}，或手动合并站点。"
 fi
 
 ${ipCertificateSetup}
@@ -498,8 +536,15 @@ tar -xzf "$archive" -C "$tmp" "$directory/frps"
 
 install -d -m 0755 /usr/local/libexec/dsh-mobile/frp/${FRP_VERSION}
 install -m 0755 "$tmp/$directory/frps" /usr/local/libexec/dsh-mobile/frp/${FRP_VERSION}/frps
-if ! id -u dsh-mobile >/dev/null 2>&1; then useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin --no-create-home dsh-mobile; fi
 install -d -m 0750 -o root -g dsh-mobile /etc/dsh-mobile
+if ! id -u dsh-mobile >/dev/null 2>&1; then
+  useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin --no-create-home dsh-mobile
+  # Ownership record: uninstall removes the account only when this deployment created it.
+  touch /etc/dsh-mobile/.owns-account
+  check account ok "已创建 dsh-mobile 系统用户。"
+else
+  check account ok "复用已有的 dsh-mobile 系统用户（卸载时将保留）。"
+fi
 cat > /etc/dsh-mobile/frps.toml <<'DSH_MOBILE_FRPS_CONFIG'
 ${config}DSH_MOBILE_FRPS_CONFIG
 chown root:dsh-mobile /etc/dsh-mobile/frps.toml
@@ -527,9 +572,9 @@ ProtectSystem=strict
 WantedBy=multi-user.target
 DSH_MOBILE_FRPS_UNIT
 
-cat > /etc/caddy/Caddyfile <<'DSH_MOBILE_CADDY'
-${caddy}DSH_MOBILE_CADDY
-chmod 0644 /etc/caddy/Caddyfile
+cat > ${FRP_CADDY_SNIPPET_PATH} <<'DSH_MOBILE_CADDY_SNIPPET'
+${caddySnippet}DSH_MOBILE_CADDY_SNIPPET
+chmod 0644 ${FRP_CADDY_SNIPPET_PATH}
 caddy validate --config /etc/caddy/Caddyfile
 systemctl daemon-reload
 # Restart (not just start) so a redeploy over a running previous generation
@@ -631,12 +676,10 @@ async function defaultRunSsh(
 }
 
 export async function deployVps(settings: FrpSettings, input: VpsDeploymentInput, options: VpsDeploymentOptions = {}): Promise<VpsDeploymentResult> {
-  const serverAddress = validateFrpServerAddress(settings.serverAddress)
   const serverPort = validateFrpServerPort(settings.serverPort)
   const token = validateFrpToken(settings.token)
   const publicOrigin = validateFrpPublicOrigin(settings.publicOrigin)
-  if (isIP(serverAddress) !== 0 && serverAddress.includes(':')) throw new Error('vps_ipv6_ssh_not_supported')
-  assertPublicSshTarget(serverAddress)
+  const serverAddress = validateVpsServerTarget(settings.serverAddress)
   const parsedInput = parseVpsDeploymentInput(input)
   if (parsedInput.sshKeyPath !== undefined) {
     const entry = await lstat(parsedInput.sshKeyPath).catch(() => undefined)
@@ -735,6 +778,11 @@ check() { echo "DSH_MOBILE_CHECK $1 $2 $3"; }
 [ "$(id -u)" = "0" ] || fail "请使用 root SSH 账号。"
 command -v systemctl >/dev/null 2>&1 || fail "VPS 不支持 systemd。"
 
+# Ownership is decided before deleting anything: only an account created by a
+# DSH Mobile deployment (marker written at useradd time) may be removed below.
+owns_account=false
+if [ -f /etc/dsh-mobile/.owns-account ]; then owns_account=true; fi
+
 systemctl disable --now dsh-mobile-cert-renew.timer >/dev/null 2>&1 || true
 systemctl disable --now dsh-mobile-frps.service >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/dsh-mobile-frps.service
@@ -748,15 +796,27 @@ rm -rf /usr/local/libexec/dsh-mobile
 rm -rf /opt/dsh-mobile/certbot-venv
 rm -f /usr/local/sbin/dsh-mobile-cert-renew
 rm -rf /var/lib/caddy/dsh-mobile-certs
+rm -f ${FRP_CADDY_SNIPPET_PATH}
 check files ok "已删除 DSH Mobile 配置、二进制与证书文件。"
 
-if [ -f /etc/caddy/Caddyfile ] && grep -q '^# Managed by DSH Mobile$' /etc/caddy/Caddyfile; then
+if [ -f /etc/caddy/Caddyfile ] && grep -Eq '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile; then
+  sed -i -E '/^[[:space:]]*import[[:space:]]+\/etc\/caddy\/dsh-mobile-dsh\.caddy([[:space:]]|$)/d' /etc/caddy/Caddyfile
+  if [ ! -s /etc/caddy/Caddyfile ]; then
+    printf '# DSH Mobile removed its site; the remaining Caddyfile was empty.\\n' > /etc/caddy/Caddyfile
+    chmod 0644 /etc/caddy/Caddyfile
+  fi
+  if command -v caddy >/dev/null 2>&1; then
+    caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy.service || systemctl restart caddy.service || true
+  fi
+  check caddy ok "已移除 DSH Mobile 站点引入；其余 Caddy 配置保持原样。"
+elif [ -f /etc/caddy/Caddyfile ] && grep -q '^# Managed by DSH Mobile$' /etc/caddy/Caddyfile; then
+  # Legacy whole-file layout (pre-snippet releases): the entire file is ours.
   printf '# DSH Mobile removed its site. Restore your own Caddyfile or reinstall the Caddy defaults.\\n' > /etc/caddy/Caddyfile
   chmod 0644 /etc/caddy/Caddyfile
   if command -v caddy >/dev/null 2>&1; then
     caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy.service || systemctl restart caddy.service || true
   fi
-  check caddy ok "已清空 DSH Mobile 管理的 Caddy 站点；请按需恢复自己的配置。"
+  check caddy ok "已清空旧版 DSH Mobile 管理的 Caddy 站点；请按需恢复自己的配置。"
 else
   check caddy ok "Caddyfile 非 DSH Mobile 管理，保持原样。"
 fi
@@ -770,14 +830,18 @@ else
   check firewall ok "UFW 未启用或无需调整。"
 fi
 
-if id dsh-mobile >/dev/null 2>&1; then
-  if pgrep -u dsh-mobile >/dev/null 2>&1; then
-    fail "dsh-mobile 用户仍有运行中的进程，已保留该用户；请先停止相关进程后重试。"
+if [ "$owns_account" = true ]; then
+  if id dsh-mobile >/dev/null 2>&1; then
+    if pgrep -u dsh-mobile >/dev/null 2>&1; then
+      fail "dsh-mobile 用户仍有运行中的进程，已保留该用户；请先停止相关进程后重试。"
+    fi
+    userdel dsh-mobile || fail "删除 dsh-mobile 系统用户失败。"
+    check account ok "已删除本次部署创建的 dsh-mobile 系统用户。"
+  else
+    check account ok "dsh-mobile 系统用户已不存在，无需删除。"
   fi
-  userdel dsh-mobile || fail "删除 dsh-mobile 系统用户失败。"
-  check account ok "已删除 dsh-mobile 系统用户。"
 else
-  check account ok "dsh-mobile 系统用户不存在，无需删除。"
+  check account ok "dsh-mobile 系统用户非本次部署创建，已保留。"
 fi
 
 echo DSH_MOBILE_UNINSTALL_OK
@@ -810,8 +874,7 @@ export async function uninstallVps(
   input: VpsDeploymentInput,
   options: VpsDeploymentOptions = {},
 ): Promise<VpsUninstallResult> {
-  const address = validateFrpServerAddress(serverAddress)
-  assertPublicSshTarget(address)
+  const address = validateVpsServerTarget(serverAddress)
   const parsedInput = parseVpsDeploymentInput(input)
   // Identity is verified with a fresh scan immediately before this destructive
   // action: every presented key must still be user-confirmed.
