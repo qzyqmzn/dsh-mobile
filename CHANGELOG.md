@@ -9,7 +9,7 @@ Notable changes to DSH Mobile are recorded here. GitHub Releases remain the sour
 
 ## 0.3.7 - 2026-09-02
 
-- Fix the Windows DSH Desktop startup failure reported in [#22](https://github.com/saya-ch/dsh-mobile/issues/22): capture subprocess output through the callback API instead of relying on `execFile` promisify metadata that a host wrapper may omit. Thanks @XChen446 for the precise 0.3.6 stack trace.
+- Fix the Windows DSH Desktop startup failure reported in [#22#22](https://github.com/saya-ch/dsh-mobile/issues/22): capture subprocess output through the callback API instead of relying on `execFile` promisify metadata that a host wrapper may omit. Thanks @XChen446 for the precise 0.3.6 stack trace.
 - Apply the same output handling to Windows SID resolution, private-file ACLs, route selection, and firewall diagnostics/setup. Invalid SID output and ACL failures still reject the operation; a failed SID lookup can be retried and Windows permission commands have bounded execution time.
 - Retain the 0.3.6 removal of the exact DSH version allowlist. Existing 0.3.3-0.3.6 Android apps and paired devices remain compatible; the 0.3.7 APK updates version metadata only.
 
@@ -21,7 +21,7 @@ Notable changes to DSH Mobile are recorded here. GitHub Releases remain the sour
 
 ## 0.3.5 - 2026-09-01
 
-- Fix [#26](https://github.com/saya-ch/dsh-mobile/issues/26): prevent mobile startup from remaining on “Loading plugins” over LAN or remote access when DSH sends the WebSocket upgrade response and initial snapshot together. The gateway now preserves that snapshot without relaxing its 16 KiB response-header limit. Thanks @oliverwan97 for the detailed report.
+- Fix [#26#26](https://github.com/saya-ch/dsh-mobile/issues/26): prevent mobile startup from remaining on “Loading plugins” over LAN or remote access when DSH sends the WebSocket upgrade response and initial snapshot together. The gateway now preserves that snapshot without relaxing its 16 KiB response-header limit. Thanks @oliverwan97 for the detailed report.
 
 ## 0.3.4 - 2026-08-31
 
@@ -44,7 +44,7 @@ Notable changes to DSH Mobile are recorded here. GitHub Releases remain the sour
 
 ## 0.3.2 - 2026-08-29
 
-- Special thanks to @JackRushante for [#16](https://github.com/saya-ch/dsh-mobile/pull/16): the secure Android media bridge, image attachments, localization foundation, bounded extension requests, and Funnel lifecycle hardening. This release retains all four original commits and their author metadata.
+- Special thanks to @JackRushante for [#16#16](https://github.com/saya-ch/dsh-mobile/pull/16): the secure Android media bridge, image attachments, localization foundation, bounded extension requests, and Funnel lifecycle hardening. This release retains all four original commits and their author metadata.
 - Move image selection and camera capture into a dedicated top row of the composer command menu, without focusing the message editor.
 - Push extension and `/mobile` changes to authenticated phones immediately, while retaining bounded polling as a network-recovery fallback.
 - Bind each mobile UI to its matching Host, script, style, and asset generation; retain the previous Host through a bounded refresh window, fail closed on client activation errors, and tighten scoped requests against encoded path traversal.
@@ -54,7 +54,7 @@ Notable changes to DSH Mobile are recorded here. GitHub Releases remain the sour
 
 ## 0.3.1 - 2026-08-28
 
-- Credit @BlueandwhiteXD ([#15](https://github.com/saya-ch/dsh-mobile/pull/15)) for the Android keyboard inset report and fix incorporated into the 0.3 mobile layout.
+- Credit @BlueandwhiteXD ([#15#15](https://github.com/saya-ch/dsh-mobile/pull/15)) for the Android keyboard inset report and fix incorporated into the 0.3 mobile layout.
 
 ## 0.3.0 - 2026-08-28
 
