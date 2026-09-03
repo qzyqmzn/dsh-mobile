@@ -157,8 +157,12 @@ export function assertExternalTrust(request: IncomingMessage, policy: RequestTru
   const origin = request.headers.origin
   if (origin !== undefined && !policy.acceptsOrigin(origin)) throw new HttpError(403, 'forbidden')
   const site = request.headers['sec-fetch-site']
-  if (site !== undefined && site !== 'same-origin' && site !== 'none') throw new HttpError(403, 'forbidden')
-  if (requireOrigin && (!policy.acceptsOrigin(origin) || site !== 'same-origin')) throw new HttpError(403, 'forbidden')
+  // 微信小程序（wx.request / wx.connectSocket）的 Sec-Fetch-Site 由微信自动附加
+  // （same-origin / same-site / cross-site），客户端无法控制，也不代表真实跨站攻击；
+  // CSRF 防护的核心是下方对 Origin 的强制校验，因此这里接受全部合法取值。
+  if (site !== undefined && site !== 'same-origin' && site !== 'same-site' && site !== 'cross-site' && site !== 'none') throw new HttpError(403, 'forbidden')
+  // POST 只强制 Origin 正确。
+  if (requireOrigin && !policy.acceptsOrigin(origin)) throw new HttpError(403, 'forbidden')
 }
 
 function localAuthority(header: string | undefined): { hostname: string; authority: string } | undefined {
