@@ -19,14 +19,14 @@
 
 > DSH Mobile is a DeepSeek Harness community plugin; the native app supports Android only.
 >
-> **0.3.7 update**: fix a Windows DSH Desktop startup crash when capturing system-command output, including the related route-selection and firewall-diagnostic paths. The 0.3.6 DSH version policy and private-file protections remain intact. [Details](CHANGELOG.md).
+> **0.3.8 update**: thanks to @StrawberryAO for the WeChat Mini-Program compatibility fix covering its automatic `Sec-Fetch-Site` and comma-joined Origin headers. The gateway also follows the active DSH WebServer port and rejects mixed untrusted Origins. [Details](CHANGELOG.md).
 >
-> **Upgrade reminder**: Windows DSH Desktop users should update to plugin 0.3.7. Existing 0.3.3-0.3.6 apps and paired devices remain compatible without re-pairing. [Compatibility notes](#compatibility).
+> **Upgrade reminder**: Windows DSH Desktop users should update to plugin 0.3.8. Existing 0.3.3-0.3.7 apps and paired devices remain compatible without re-pairing. [Compatibility notes](#compatibility).
 
 <p align="center">
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.7/dsh-mobile-android-v0.3.7.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile Android app icon" width="72" height="72"></a><br>
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.7/dsh-mobile-android-v0.3.7.apk"><strong>Download Android app 0.3.7</strong></a><br>
-  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.7">Release notes and checksums</a></sub>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.8/dsh-mobile-android-v0.3.8.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile Android app icon" width="72" height="72"></a><br>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.8/dsh-mobile-android-v0.3.8.apk"><strong>Download Android app 0.3.8</strong></a><br>
+  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.8">Release notes and checksums</a></sub>
 </p>
 
 DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN or an optional Tailscale Funnel, cpolar, or self-hosted FRP remote path. Local and remote access keep the same sessions, Workspaces, messages, and tools while using separate switches and paired-device stores without modifying DeepSeek Harness source.
@@ -190,10 +190,12 @@ See [SECURITY.md](SECURITY.md).
 
 ## Compatibility
 
-DSH Mobile 0.3.6 no longer blocks startup by exact DSH version and has verified the mobile frontend and connection interfaces in DSH 0.1.2-alpha.3/alpha.4. Existing 0.3.3-0.3.5 apps do not need re-pairing; the 0.3.6 Android build changes version metadata only. Earlier apps use a different status-bar strategy, so updating both is recommended. App 0.1.3 or earlier requires reinstalling and pairing again.
+DSH Mobile 0.3.8 keeps the open DSH version policy introduced in 0.3.6, fixes WeChat Mini-Program request headers, follows the active Desktop upstream port, and has verified the mobile frontend and connection interfaces in DSH 0.1.2-alpha.3/alpha.4. Existing 0.3.3-0.3.7 apps do not need re-pairing. Earlier apps use a different status-bar strategy, so updating both is recommended. App 0.1.3 or earlier requires reinstalling and pairing again.
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
+| `0.3.8` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, and `0.1.2-alpha.1` through `alpha.4`; unlisted versions are no longer rejected by version alone |
+| `0.3.7` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, and `0.1.2-alpha.1` through `alpha.4`; unlisted versions are no longer rejected by version alone |
 | `0.3.6` | `0.1.0-rc.5`, `rc.6`, `rc.7`, `0.1.1-rc.2`, and `0.1.2-alpha.1` through `alpha.4`; unlisted versions are no longer rejected by version alone |
 | `0.3.5` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1`, `0.1.2-alpha.2` |
 | `0.3.4` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1`, `0.1.2-alpha.2` |

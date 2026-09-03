@@ -26,14 +26,14 @@
 
 > DSH Mobile 是 DeepSeek Harness 社区插件，原生 App 仅支持 Android。
 >
-> **0.3.7 更新**：修复 Windows DSH Desktop 获取系统命令输出时的启动崩溃，同步完善网卡选择与防火墙诊断；保留 0.3.6 的 DSH 版本开放策略和私有文件权限保护。[详细记录](CHANGELOG.md)。
+> **0.3.8 更新**：感谢 @StrawberryAO 贡献微信小程序兼容修复，支持微信自动附加的 `Sec-Fetch-Site` 和逗号合并 Origin；同时让网关跟随 DSH WebServer 实际端口，并拒绝混合不受信任的 Origin。[详细记录](CHANGELOG.md)。
 >
-> **升级提醒**：Windows DSH Desktop 用户请更新至插件 0.3.7；现有 0.3.3-0.3.6 App 可继续使用，无需重新配对。[兼容说明](#兼容性)。
+> **升级提醒**：Windows DSH Desktop 用户请更新至插件 0.3.8；现有 0.3.3-0.3.7 App 可继续使用，无需重新配对。[兼容说明](#兼容性)。
 
 <p align="center">
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.7/dsh-mobile-android-v0.3.7.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile 安卓应用图标" width="72" height="72"></a><br>
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.7/dsh-mobile-android-v0.3.7.apk"><strong>下载 Android App 0.3.7</strong></a><br>
-  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.7">版本说明与校验文件</a></sub>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.8/dsh-mobile-android-v0.3.8.apk"><img src="assets/brand/app-icon-rounded.svg" alt="DSH Mobile 安卓应用图标" width="72" height="72"></a><br>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.8/dsh-mobile-android-v0.3.8.apk"><strong>下载 Android App 0.3.8</strong></a><br>
+  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.8">版本说明与校验文件</a></sub>
 </p>
 
 DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 通过局域网，或可选的 Tailscale Funnel、cpolar、自建 FRP 远程通道连接电脑，继续使用同一份会话、工作区、消息和工具。局域网与远程访问分别启停、分别管理设备，且都不修改 DeepSeek Harness 源码。
@@ -199,10 +199,12 @@ flowchart LR
 
 ## 兼容性
 
-DSH Mobile 0.3.6 不再按 DSH 精确版本号阻止启动，并已验证 DSH 0.1.2-alpha.3/alpha.4 的移动前端与连接接口。现有 0.3.3-0.3.5 App 无需重新配对；0.3.6 Android App 仅同步版本信息，功能行为不变。更早的 App 使用不同的状态栏策略，建议同步升级；App 0.1.3 及更早版本需卸载重装并重新配对。
+DSH Mobile 0.3.8 在 0.3.6 开放版本兼容策略的基础上，修复微信小程序请求头兼容和 Desktop upstream 端口跟随，并已验证 DSH 0.1.2-alpha.3/alpha.4 的移动前端与连接接口。现有 0.3.3-0.3.7 App 无需重新配对；更早的 App 使用不同的状态栏策略，建议同步升级；App 0.1.3 及更早版本需卸载重装并重新配对。
 
 | DSH Mobile | 已验证的 DeepSeek Harness                                               |
 | ------------ | ------------------------------------------------------------------------- |
+| `0.3.8` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1` 至 `alpha.4`；未列版本不再仅因版本号被拒绝 |
+| `0.3.7` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1` 至 `alpha.4`；未列版本不再仅因版本号被拒绝 |
 | `0.3.6` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1` 至 `alpha.4`；未列版本不再仅因版本号被拒绝 |
 | `0.3.5` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1`、`0.1.2-alpha.2` |
 | `0.3.4` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1`、`0.1.2-alpha.2` |
