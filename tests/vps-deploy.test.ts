@@ -148,6 +148,9 @@ describe('VPS deployment', () => {
     expect(script).not.toContain('cat > /etc/caddy/Caddyfile')
     // The account is only removed when this deployment created it.
     expect(script).toContain('/etc/dsh-mobile/.owns-account')
+    // The account must exist before anything references its group: a redeploy
+    // after a cleanup would otherwise fail on `install -g dsh-mobile`.
+    expect(script.indexOf('useradd --system')).toBeLessThan(script.indexOf('install -d -m 0750 -o root -g dsh-mobile'))
     // A redeploy must restart frps so the new token takes effect instead of
     // leaving the previous generation running with stale credentials.
     expect(script).toContain('systemctl restart dsh-mobile-frps.service')
@@ -215,6 +218,25 @@ describe('VPS deployment', () => {
         )
       },
     })).rejects.toThrow('vps_deploy_failed:custom failure detail')
+  })
+
+  it('reports the last output line when the script aborts without a check line', async () => {
+    await expect(deployVps(settings, sshInput(), {
+      runKeyscan: async () => keyscanOutput,
+      runSsh: async () => {
+        throw new VpsSshError(
+          'vps_deploy_failed',
+          'Reading package lists...\n',
+          'Some apt noise\ninstall: invalid group \'dsh-mobile\'\n',
+        )
+      },
+    })).rejects.toThrow('vps_deploy_failed:install: invalid group')
+    await expect(deployVps(settings, sshInput(), {
+      runKeyscan: async () => keyscanOutput,
+      runSsh: async () => {
+        throw new VpsSshError('vps_ssh_timeout', '', '')
+      },
+    })).rejects.toThrow(/^vps_ssh_timeout$/u)
   })
 
   it('relabels transport failures during uninstall and prefers check detail', async () => {

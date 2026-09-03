@@ -363,6 +363,23 @@ function parseChecks(stdout: string, stderr: string, token: string): readonly Vp
   return Object.freeze(checks)
 }
 
+/**
+ * One-line failure detail for transport-level failures: prefer the failed
+ * remote check, otherwise use the last stderr line (a `set -eu` abort has no
+ * check line) instead of dumping the whole transcript into the UI.
+ */
+function failureDetail(stdout: string, stderr: string, token: string): string {
+  const parsed = parseChecks(`${stdout}\n${stderr}`, '', token)
+  const failed = parsed.find(check => check.status === 'error')
+  if (failed !== undefined) return failed.detail
+  for (const stream of [stderr, stdout]) {
+    const lines = stream.split(/\r?\n/u).map(line => line.trim()).filter(line => line !== '')
+    const last = lines[lines.length - 1]
+    if (last !== undefined) return safeOutput(last, token)
+  }
+  return ''
+}
+
 function deploymentScript(settings: FrpSettings): string {
   const amd64 = LINUX_ARTIFACTS.x64
   const arm64 = LINUX_ARTIFACTS.arm64
@@ -544,9 +561,14 @@ tar -xzf "$archive" -C "$tmp" "$directory/frps"
 
 install -d -m 0755 /usr/local/libexec/dsh-mobile/frp/${FRP_VERSION}
 install -m 0755 "$tmp/$directory/frps" /usr/local/libexec/dsh-mobile/frp/${FRP_VERSION}/frps
-install -d -m 0750 -o root -g dsh-mobile /etc/dsh-mobile
+# The account must exist before anything references its group below.
+dsh_mobile_created=false
 if ! id -u dsh-mobile >/dev/null 2>&1; then
   useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin --no-create-home dsh-mobile
+  dsh_mobile_created=true
+fi
+install -d -m 0750 -o root -g dsh-mobile /etc/dsh-mobile
+if [ "$dsh_mobile_created" = true ]; then
   # Ownership record: uninstall removes the account only when this deployment created it.
   touch /etc/dsh-mobile/.owns-account
   check account ok "已创建 dsh-mobile 系统用户。"
@@ -724,9 +746,7 @@ export async function deployVps(settings: FrpSettings, input: VpsDeploymentInput
       // Prefer the failed remote check over raw output: the script reports
       // failures through DSH_MOBILE_CHECK lines on either stream, and the raw
       // concatenation would leak protocol framing into the UI.
-      const parsed = parseChecks(`${error.stdout}\n${error.stderr}`, '', token)
-      const failed = parsed.find(check => check.status === 'error')
-      const detail = failed?.detail ?? safeOutput(`${error.stderr}\n${error.stdout}`, token)
+      const detail = failureDetail(error.stdout, error.stderr, token)
       options.log?.('ssh-failed', { code: error.message, detail: detail || 'no remote output' })
       throw new Error(detail === '' ? error.message : `${error.message}:${detail}`, { cause: error })
     }
@@ -917,9 +937,7 @@ export async function uninstallVps(
     if (error instanceof VpsSshError) {
       // runProcess labels transport failures as deploy errors; relabel them
       // and prefer the failed remote check over raw output (see deployVps).
-      const parsed = parseChecks(`${error.stdout}\n${error.stderr}`, '', '')
-      const failed = parsed.find(check => check.status === 'error')
-      const detail = failed?.detail ?? ''
+      const detail = failureDetail(error.stdout, error.stderr, '')
       const code = error.message === 'vps_deploy_failed' ? 'vps_uninstall_failed' : error.message
       options.log?.('uninstall-failed', { code, detail: detail || 'no remote output' })
       throw new Error(detail === '' ? code : `${code}:${detail}`, { cause: error })
