@@ -1,5 +1,6 @@
 import { execFileText as execFile } from './exec-file.js'
 import { lookup } from 'node:dns/promises'
+
 import type { RemoteProvider } from './remote.js'
 import { DSH_MOBILE_VERSION, MINIMUM_ANDROID_APP_VERSION } from './version.js'
 

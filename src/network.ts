@@ -256,16 +256,24 @@ export class RequestTrustPolicy {
   /** Return the canonical accepted Origin, otherwise undefined. */
   canonicalOrigin(header: string | undefined): string | undefined {
     if (header === undefined) return undefined
-    let normalized: string
-    try {
-      const parsed = new URL(header)
-      if (parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== '' || parsed.username !== '' || parsed.password !== '') {
+    // 微信小程序 wx.connectSocket 会把允许的 Origin 与 undefined 用逗号合并。
+    let normalized: string | undefined
+    for (const part of header.split(',')) {
+      const trimmed = part.trim()
+      if (trimmed === 'undefined') continue
+      let candidate: string
+      try {
+        const parsed = new URL(trimmed)
+        if (parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== '' || parsed.username !== '' || parsed.password !== '') {
+          return undefined
+        }
+        candidate = parsed.origin.toLowerCase()
+      } catch {
         return undefined
       }
-      normalized = parsed.origin.toLowerCase()
-    } catch {
-      return undefined
+      if (!this.origins.has(candidate) || normalized !== undefined) return undefined
+      normalized = candidate
     }
-    return this.origins.has(normalized) ? normalized : undefined
+    return normalized
   }
 }

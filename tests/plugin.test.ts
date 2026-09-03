@@ -57,14 +57,16 @@ async function invoke(route: WebRoute, method: 'GET' | 'POST', path: string, bod
   }
 }
 
-async function mount(initiallyEnabled = false): Promise<{ context: Context; route: WebRoute; command: CommandDefinition }> {
+async function mount(initiallyEnabled = false, webServerPort = 3080): Promise<{ context: Context; route: WebRoute; command: CommandDefinition; upstreamBase: string | undefined }> {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-plugin-'))
   temporaryDirectories.push(directory)
   let route: WebRoute | undefined
   let command: CommandDefinition | undefined
+  let upstreamBase: string | undefined
   const context = new Context()
   contexts.push(context)
   context.provide('webServer', {
+    port: webServerPort,
     register(candidate: WebRoute) {
       route = candidate
       return () => { if (route === candidate) route = undefined }
@@ -78,6 +80,7 @@ async function mount(initiallyEnabled = false): Promise<{ context: Context; rout
   } as never)
   context.provide('connection', {
     authenticatedUrl(baseUrl: string) {
+      upstreamBase = baseUrl
       return `${baseUrl}/?token=test-launch-token`
     },
   } as never)
@@ -92,7 +95,7 @@ async function mount(initiallyEnabled = false): Promise<{ context: Context; rout
   })
   if (route === undefined) throw new Error('plugin did not register its control route')
   if (command === undefined) throw new Error('plugin did not register its /mobile command')
-  return { context, route, command }
+  return { context, route, command, upstreamBase }
 }
 
 describe('remote Funnel gateway configuration', () => {
@@ -209,6 +212,11 @@ describe('stock DSH lifecycle', () => {
       checks: expect.any(Array),
       report: expect.stringContaining('DSH Mobile 诊断报告'),
     })
+  })
+
+  it('follows the active WebServer port when no setup upstream is configured', async () => {
+    const mounted = await mount(false, 43120)
+    expect(mounted.upstreamBase).toBe('http://127.0.0.1:43120')
   })
 
   it('starts and stops the gateway through the local control route', async () => {
