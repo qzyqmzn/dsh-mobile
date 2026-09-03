@@ -26,7 +26,15 @@ describe('restricted FRP configuration', () => {
   it('accepts only the fixed single-purpose inputs', () => {
     expect(parseFrpSettings(input)).toEqual({ version: 1, ...input })
     expect(() => parseFrpSettings({ ...input, publicOrigin: 'http://dsh.example.com' })).toThrow('frp_public_origin_invalid')
-    expect(parseFrpSettings({ ...input, publicOrigin: 'https://203.0.113.10' }).publicOrigin).toBe('https://203.0.113.10')
+    expect(parseFrpSettings({ ...input, publicOrigin: 'https://1.2.3.4' }).publicOrigin).toBe('https://1.2.3.4')
+    expect(parseFrpSettings({ ...input, serverAddress: '1.2.3.4' }).serverAddress).toBe('1.2.3.4')
+    // Documentation, private, and reserved IPv4 literals can never be a public endpoint.
+    for (const host of ['203.0.113.10', '192.0.2.1', '198.51.100.7', '192.168.1.20', '10.0.0.8', '100.64.0.8', '0.0.0.0', '255.255.255.255', '224.0.0.1', '198.18.0.1', '192.0.0.1', '192.88.99.1']) {
+      expect(() => parseFrpSettings({ ...input, publicOrigin: `https://${host}` })).toThrow('frp_public_origin_invalid')
+    }
+    // The frpc server address stays permissive so local loopback rigs keep working;
+    // VPS operations enforce a public SSH target separately.
+    expect(parseFrpSettings({ ...input, serverAddress: '127.0.0.1' }).serverAddress).toBe('127.0.0.1')
     expect(() => parseFrpSettings({ ...input, publicOrigin: 'https://[::1]' })).toThrow('frp_public_origin_invalid')
     expect(() => parseFrpSettings({ ...input, token: 'too-short' })).toThrow('frp_token_invalid')
     expect(() => parseFrpSettings({ ...input, localPort: 3080 })).toThrow('frp_settings_invalid')

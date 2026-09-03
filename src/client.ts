@@ -409,6 +409,11 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   const frpStep2Text = element('p'); frpStep2Text.textContent = t('frpStep2Text')
   const frpCopyTemplate = element('button', 'dsh-mobile-control__secondary dsh-mobile-control__frp-action'); frpCopyTemplate.type = 'button'; frpCopyTemplate.textContent = t('copyServerTemplate')
   const vpsDeployText = element('p'); vpsDeployText.textContent = t('vpsDeployText')
+  const vpsChangesTitle = element('p'); vpsChangesTitle.textContent = t('vpsDeployChangesTitle')
+  const vpsChanges = element('ul', 'dsh-mobile-control__frp-changes')
+  for (const key of ['vpsDeployChangePackages', 'vpsDeployChangeServices', 'vpsDeployChangeFirewall', 'vpsDeployChangeManual'] as const) {
+    const item = element('li'); item.textContent = t(key); vpsChanges.append(item)
+  }
   const vpsDeployFields = element('div', 'dsh-mobile-control__frp-fields')
   const vpsSshUserLabel = element('label', 'dsh-mobile-control__field'); vpsSshUserLabel.textContent = t('vpsSshUser')
   const vpsSshUser = element('input'); vpsSshUser.type = 'text'; vpsSshUser.autocomplete = 'username'; vpsSshUser.value = 'ubuntu'; vpsSshUser.spellcheck = false
@@ -420,7 +425,9 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   vpsDeployFields.append(vpsSshUserLabel, vpsSshPortLabel, vpsSshKeyLabel)
   const vpsDeploy = element('button', 'dsh-mobile-control__primary dsh-mobile-control__frp-action'); vpsDeploy.type = 'button'; vpsDeploy.textContent = t('vpsDeploy')
   const vpsDeployStatus = element('p', 'dsh-mobile-control__component-status'); vpsDeployStatus.textContent = ''
-  frpStep2.append(frpStep2Title, frpStep2Text, frpCopyTemplate, vpsDeployText, vpsDeployFields, vpsDeploy, vpsDeployStatus)
+  const vpsCopyUninstall = element('button', 'dsh-mobile-control__secondary dsh-mobile-control__frp-action'); vpsCopyUninstall.type = 'button'; vpsCopyUninstall.textContent = t('vpsCopyUninstall')
+  const vpsUninstall = element('button', 'dsh-mobile-control__danger dsh-mobile-control__frp-action'); vpsUninstall.type = 'button'; vpsUninstall.textContent = t('vpsUninstall')
+  frpStep2.append(frpStep2Title, frpStep2Text, frpCopyTemplate, vpsDeployText, vpsChangesTitle, vpsChanges, vpsDeployFields, vpsDeploy, vpsDeployStatus, vpsCopyUninstall, vpsUninstall)
   const frpStep3 = element('section', 'dsh-mobile-control__frp-step')
   const frpStep3Title = element('strong'); frpStep3Title.textContent = t('frpStep3Title')
   const frpStep3Text = element('p'); frpStep3Text.textContent = t('frpStep3Text')
@@ -784,6 +791,8 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
     frpInstall.disabled = remoteProviderBusy
     frpConfigure.disabled = remoteProviderBusy || !frpInstalled
     vpsDeploy.disabled = remoteProviderBusy || !validVpsDeploymentForm()
+    vpsCopyUninstall.disabled = vpsDeploy.disabled
+    vpsUninstall.disabled = vpsDeploy.disabled
     frpPurge.hidden = !frpInstalled && !frpConfigured
     frpComponentStatus.textContent = !frpSupported
       ? t('frpUnsupported')
@@ -1011,12 +1020,34 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
       && validVpsSshKey(String(vpsSshKey.value ?? '').trim())
   }
   const refreshVpsDeployButton = (): void => {
-    vpsDeploy.disabled = remoteProviderBusy || !validVpsDeploymentForm()
+    const disabled = remoteProviderBusy || !validVpsDeploymentForm()
+    vpsDeploy.disabled = disabled
+    vpsCopyUninstall.disabled = disabled
+    vpsUninstall.disabled = disabled
   }
   for (const input of [frpServer, frpPort, frpToken, frpOrigin, vpsSshUser, vpsSshPort, vpsSshKey]) {
     input.addEventListener('input', refreshVpsDeployButton)
   }
   for (const input of [vpsSshUser, vpsSshPort, vpsSshKey]) input.addEventListener('input', saveVpsForm)
+  const vpsCertName = (origin: string): string | undefined => {
+    try {
+      const host = new URL(origin).hostname
+      return /^\d{1,3}(?:\.\d{1,3}){3}$/u.test(host) ? host : undefined
+    } catch { return undefined }
+  }
+  const requestVpsHostKeys = (serverAddress: string, sshUser: string, sshPort: number, sshKeyPath: string): Promise<ReadonlyArray<{ readonly display: string; readonly fingerprint: string }>> => {
+    const keyPayload: Record<string, unknown> = { serverAddress, sshUser, sshPort }
+    if (sshKeyPath !== '') keyPayload.sshKeyPath = sshKeyPath
+    return controlRequestJson('/api/mobile-access/remote/frp/vps/host-keys', { method: 'POST', body: JSON.stringify(keyPayload) }, LONG_CONTROL_REQUEST_TIMEOUT_MS)
+      .then(keys => {
+        const hostKeys = Array.isArray(keys.vpsHostKeys) ? keys.vpsHostKeys as Array<Record<string, unknown>> : []
+        const confirmed = hostKeys
+          .filter(key => typeof key.fingerprint === 'string' && typeof key.keyType === 'string')
+          .map(key => ({ display: `${String(key.keyType)} ${String(key.fingerprint)}`, fingerprint: String(key.fingerprint) }))
+        if (confirmed.length === 0) throw new Error(String(t('vpsHostKeyFailed', { error: 'empty' })))
+        return confirmed
+      })
+  }
   vpsDeploy.addEventListener('click', () => {
     if (remoteProviderBusy) return
     const form = frpForm()
@@ -1032,24 +1063,136 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
       vpsDeployStatus.textContent = t('vpsDeployFailed', { error: t('vpsSshKey') })
       return
     }
-    if (!window.confirm(t('vpsDeployConfirm'))) return
     remoteProviderBusy = true
     vpsDeploy.disabled = true
-    vpsDeployStatus.textContent = t('vpsDeploying')
-    remoteStatus.textContent = t('vpsDeploying')
-    const payload: Record<string, unknown> = { confirm: true, ...form, sshUser, sshPort }
-    if (sshKeyPath !== '') payload.sshKeyPath = sshKeyPath
-    void controlRequestJson('/api/mobile-access/remote/frp/vps/deploy', { method: 'POST', body: JSON.stringify(payload) }, LONG_CONTROL_REQUEST_TIMEOUT_MS)
-      .then(data => {
-        const deployment = data.vpsDeployment !== null && typeof data.vpsDeployment === 'object' ? data.vpsDeployment as Record<string, unknown> : {}
-        vpsDeployStatus.textContent = deployment.deployed === true ? t('vpsDeploySuccess') : t('vpsDeployFailed', { error: t('vpsDeployFailed', { error: 'unknown result' }) })
-        remoteStatus.textContent = vpsDeployStatus.textContent
-        renderRemote(data)
+    vpsCopyUninstall.disabled = true
+    vpsUninstall.disabled = true
+    vpsDeployStatus.textContent = t('vpsHostKeyFetching')
+    remoteStatus.textContent = t('vpsHostKeyFetching')
+    void requestVpsHostKeys(form.serverAddress, sshUser, sshPort, sshKeyPath)
+      .then(hostKeys => {
+        const display = hostKeys.map(key => key.display).join('\n')
+        if (!window.confirm(t('vpsDeployConfirmWithKeys', { fingerprints: display }))) {
+          remoteProviderBusy = false
+          refreshVpsDeployButton()
+          loadRemote()
+          return
+        }
+        vpsDeployStatus.textContent = t('vpsDeploying')
+        remoteStatus.textContent = t('vpsDeploying')
+        const payload: Record<string, unknown> = {
+          confirm: true,
+          ...form,
+          sshUser,
+          sshPort,
+          hostFingerprints: hostKeys.map(key => key.fingerprint),
+        }
+        if (sshKeyPath !== '') payload.sshKeyPath = sshKeyPath
+        return controlRequestJson('/api/mobile-access/remote/frp/vps/deploy', { method: 'POST', body: JSON.stringify(payload) }, LONG_CONTROL_REQUEST_TIMEOUT_MS)
+          .then(data => {
+            const deployment = data.vpsDeployment !== null && typeof data.vpsDeployment === 'object' ? data.vpsDeployment as Record<string, unknown> : {}
+            vpsDeployStatus.textContent = deployment.deployed === true ? t('vpsDeploySuccess') : t('vpsDeployFailed', { error: t('vpsDeployFailed', { error: 'unknown result' }) })
+            remoteStatus.textContent = vpsDeployStatus.textContent
+            renderRemote(data)
+          }, error => {
+            vpsDeployStatus.textContent = t('vpsDeployFailed', { error: String(error) })
+            remoteStatus.textContent = vpsDeployStatus.textContent
+          })
+          .finally(() => { remoteProviderBusy = false; loadRemote() })
       }, error => {
-        vpsDeployStatus.textContent = t('vpsDeployFailed', { error: String(error) })
+        vpsDeployStatus.textContent = t('vpsHostKeyFailed', { error: String(error) })
         remoteStatus.textContent = vpsDeployStatus.textContent
+        remoteProviderBusy = false
+        refreshVpsDeployButton()
+        loadRemote()
+      })
+  })
+  const readVpsSshForm = (): { sshUser: string; sshPort: number; sshKeyPath: string } | undefined => {
+    const sshUser = vpsSshUser.value.trim()
+    const sshPort = Number(vpsSshPort.value)
+    const sshKeyPath = vpsSshKey.value.trim()
+    saveVpsForm()
+    if (!validVpsSshUser(sshUser) || !Number.isSafeInteger(sshPort) || sshPort < 1 || sshPort > 65535 || !validVpsSshKey(sshKeyPath)) {
+      vpsDeployStatus.textContent = t('vpsDeployFailed', { error: t('vpsSshKey') })
+      return undefined
+    }
+    return { sshUser, sshPort, sshKeyPath }
+  }
+  vpsCopyUninstall.addEventListener('click', () => {
+    if (remoteProviderBusy) return
+    const form = frpForm()
+    if (!validFrpForm(form)) {
+      vpsDeployStatus.textContent = t('vpsDeployNotReady')
+      return
+    }
+    remoteProviderBusy = true
+    refreshVpsDeployButton()
+    const scriptPayload: Record<string, unknown> = { serverPort: form.serverPort }
+    const certName = vpsCertName(form.publicOrigin)
+    if (certName !== undefined) scriptPayload.certName = certName
+    void controlRequestJson('/api/mobile-access/remote/frp/vps/uninstall-script', { method: 'POST', body: JSON.stringify(scriptPayload) }, LONG_CONTROL_REQUEST_TIMEOUT_MS)
+      .then(data => {
+        const script = typeof data.vpsUninstallScript === 'string' ? data.vpsUninstallScript : ''
+        if (script === '') throw new Error('empty script')
+        return navigator.clipboard.writeText(script)
+      })
+      .then(() => { vpsDeployStatus.textContent = t('vpsUninstallScriptCopied') }, error => {
+        vpsDeployStatus.textContent = t('vpsUninstallScriptFailed', { error: String(error) })
       })
       .finally(() => { remoteProviderBusy = false; loadRemote() })
+  })
+  vpsUninstall.addEventListener('click', () => {
+    if (remoteProviderBusy) return
+    const form = frpForm()
+    if (!validFrpForm(form)) {
+      vpsDeployStatus.textContent = t('vpsDeployNotReady')
+      return
+    }
+    const ssh = readVpsSshForm()
+    if (ssh === undefined) return
+    remoteProviderBusy = true
+    refreshVpsDeployButton()
+    vpsDeployStatus.textContent = t('vpsHostKeyFetching')
+    remoteStatus.textContent = t('vpsHostKeyFetching')
+    void requestVpsHostKeys(form.serverAddress, ssh.sshUser, ssh.sshPort, ssh.sshKeyPath)
+      .then(hostKeys => {
+        if (!window.confirm(t('vpsUninstallConfirmWithKeys', { fingerprints: hostKeys.map(key => key.display).join('\n') }))) {
+          remoteProviderBusy = false
+          refreshVpsDeployButton()
+          loadRemote()
+          return
+        }
+        vpsDeployStatus.textContent = t('vpsUninstalling')
+        remoteStatus.textContent = t('vpsUninstalling')
+        const payload: Record<string, unknown> = {
+          confirm: true,
+          serverAddress: form.serverAddress,
+          serverPort: form.serverPort,
+          sshUser: ssh.sshUser,
+          sshPort: ssh.sshPort,
+          hostFingerprints: hostKeys.map(key => key.fingerprint),
+        }
+        if (ssh.sshKeyPath !== '') payload.sshKeyPath = ssh.sshKeyPath
+        const certName = vpsCertName(form.publicOrigin)
+        if (certName !== undefined) payload.certName = certName
+        return controlRequestJson('/api/mobile-access/remote/frp/vps/uninstall', { method: 'POST', body: JSON.stringify(payload) }, LONG_CONTROL_REQUEST_TIMEOUT_MS)
+          .then(data => {
+            const removal = data.vpsUninstall !== null && typeof data.vpsUninstall === 'object' ? data.vpsUninstall as Record<string, unknown> : {}
+            vpsDeployStatus.textContent = removal.removed === true ? t('vpsUninstallSuccess') : t('vpsUninstallFailed', { error: t('vpsUninstallFailed', { error: 'unknown result' }) })
+            remoteStatus.textContent = vpsDeployStatus.textContent
+            renderRemote(data)
+          }, error => {
+            vpsDeployStatus.textContent = t('vpsUninstallFailed', { error: String(error) })
+            remoteStatus.textContent = vpsDeployStatus.textContent
+          })
+          .finally(() => { remoteProviderBusy = false; loadRemote() })
+      }, error => {
+        vpsDeployStatus.textContent = t('vpsHostKeyFailed', { error: String(error) })
+        remoteStatus.textContent = vpsDeployStatus.textContent
+        remoteProviderBusy = false
+        refreshVpsDeployButton()
+        loadRemote()
+      })
   })
   frpInstall.addEventListener('click', () => {
     if (remoteProviderBusy) return

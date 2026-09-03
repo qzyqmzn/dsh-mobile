@@ -36,11 +36,20 @@ class PairingScanPolicyTest {
 
     @Test
     fun acceptsAPublicIpv4OnlyFromTheRemoteFlow() {
-        val remote = PairingScanPolicy.parse(pairingLink("203.0.113.10"), AccessMode.REMOTE)
-        val lan = PairingScanPolicy.parse(pairingLink("203.0.113.10"), AccessMode.LAN)
+        val remote = PairingScanPolicy.parse(pairingLink("1.2.3.4"), AccessMode.REMOTE)
+        val lan = PairingScanPolicy.parse(pairingLink("1.2.3.4"), AccessMode.LAN)
 
         assertEquals(AccessMode.REMOTE, remote?.mode)
         assertNull(lan)
+    }
+
+    @Test
+    fun rejectsDocumentationIpv4FromTheRemoteFlow() {
+        // TEST-NET addresses are not globally routable and can never be a VPS endpoint.
+        // (The LAN flow still treats unknown literals as ordinary non-remote hosts.)
+        for (host in listOf("192.0.2.1", "198.51.100.7", "203.0.113.10")) {
+            assertNull(PairingScanPolicy.parse(pairingLink(host), AccessMode.REMOTE))
+        }
     }
 
     @Test

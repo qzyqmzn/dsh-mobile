@@ -1,5 +1,15 @@
+import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
-import { deployVps, parseVpsDeploymentInput, vpsDeploymentScriptForTesting } from '../src/vps-deploy.js'
+import {
+  buildPinnedKnownHosts,
+  createVpsUninstallScript,
+  deployVps,
+  fetchVpsHostKeys,
+  fingerprintHostPublicKey,
+  parseVpsDeploymentInput,
+  uninstallVps,
+  vpsDeploymentScriptForTesting,
+} from '../src/vps-deploy.js'
 import { parseFrpSettings } from '../src/frp-config.js'
 
 const settings = parseFrpSettings({
@@ -9,16 +19,101 @@ const settings = parseFrpSettings({
   publicOrigin: 'https://dsh.example.com',
 })
 
+// Deterministic stand-in host keys (51-byte ed25519-style blobs).
+const keyA = Buffer.alloc(51, 7).toString('base64')
+const keyB = Buffer.alloc(51, 9).toString('base64')
+const fingerprintA = fingerprintHostPublicKey('ssh-ed25519', keyA)
+const fingerprintB = fingerprintHostPublicKey('ssh-ed25519', keyB)
+const keyscanOutput = `# frp.example.com:22 SSH-2.0-OpenSSH_9.6\nfrp.example.com ssh-ed25519 ${keyA}\nfrp.example.com ssh-ed25519 ${keyB}\n`
+
+function sshInput(fingerprints: readonly string[] = [fingerprintA, fingerprintB]) {
+  return { sshUser: 'root', sshPort: 22, hostFingerprints: [...fingerprints] }
+}
+
 describe('VPS deployment', () => {
   it('validates SSH input without accepting arbitrary remote arguments', () => {
-    expect(parseVpsDeploymentInput({ sshUser: 'root', sshPort: 22 })).toEqual({ sshUser: 'root', sshPort: 22 })
-    expect(parseVpsDeploymentInput({ sshUser: 'deploy-user', sshPort: 2222, sshKeyPath: 'C:\\keys\\dsh' })).toEqual({
-      sshUser: 'deploy-user', sshPort: 2222, sshKeyPath: 'C:\\keys\\dsh',
+    expect(parseVpsDeploymentInput({ sshUser: 'root', sshPort: 22, hostFingerprints: [fingerprintA] })).toEqual({
+      sshUser: 'root', sshPort: 22, hostFingerprints: [fingerprintA],
     })
-    expect(() => parseVpsDeploymentInput({ sshUser: 'root;rm -rf /', sshPort: 22 })).toThrow('vps_ssh_user_invalid')
-    expect(() => parseVpsDeploymentInput({ sshUser: 'root', sshPort: 22, command: 'id' })).toThrow('vps_deploy_input_invalid')
+    expect(parseVpsDeploymentInput({ sshUser: 'deploy-user', sshPort: 2222, sshKeyPath: 'C:\\keys\\dsh', hostFingerprints: [fingerprintA] })).toEqual({
+      sshUser: 'deploy-user', sshPort: 2222, sshKeyPath: 'C:\\keys\\dsh', hostFingerprints: [fingerprintA],
+    })
+    expect(() => parseVpsDeploymentInput({ sshUser: 'root;rm -rf /', sshPort: 22, hostFingerprints: [fingerprintA] })).toThrow('vps_ssh_user_invalid')
+    expect(() => parseVpsDeploymentInput({ sshUser: 'root', sshPort: 22, hostFingerprints: [fingerprintA], command: 'id' })).toThrow('vps_deploy_input_invalid')
   })
 
+  it('requires confirmed host fingerprints before any connection', () => {
+    expect(() => parseVpsDeploymentInput({ sshUser: 'root', sshPort: 22 })).toThrow('vps_host_key_unconfirmed')
+    expect(() => parseVpsDeploymentInput({ sshUser: 'root', sshPort: 22, hostFingerprints: [] })).toThrow('vps_host_key_unconfirmed')
+    expect(() => parseVpsDeploymentInput({ sshUser: 'root', sshPort: 22, hostFingerprints: ['not-a-fingerprint'] })).toThrow('vps_host_key_unconfirmed')
+    expect(() => parseVpsDeploymentInput({ sshUser: 'root', sshPort: 22, hostFingerprints: ['MD5:aa:bb:cc'] })).toThrow('vps_host_key_unconfirmed')
+  })
+
+  it('refuses non-public IPv4 literals as VPS targets without touching the network', async () => {
+    for (const serverAddress of ['127.0.0.1', '192.168.1.20', '10.0.0.8', '203.0.113.10', '192.0.2.1']) {
+      const privateSettings = parseFrpSettings({ ...settings, serverAddress, publicOrigin: 'https://dsh.example.com' })
+      let scanned = false
+      await expect(deployVps(privateSettings, sshInput(), {
+        runKeyscan: async () => { scanned = true; return keyscanOutput },
+        runSsh: async () => ({ stdout: 'DSH_MOBILE_DEPLOYMENT_OK\n', stderr: '' }),
+      })).rejects.toThrow('vps_server_not_public')
+      expect(scanned).toBe(false)
+      await expect(fetchVpsHostKeys(serverAddress, { sshUser: 'root', sshPort: 22 }, {
+        runKeyscan: async () => keyscanOutput,
+      })).rejects.toThrow('vps_server_not_public')
+    }
+  })
+
+  it('fetches host keys with OpenSSH-style fingerprints for user confirmation', async () => {
+    const keys = await fetchVpsHostKeys('frp.example.com', { sshUser: 'root', sshPort: 22 }, {
+      runKeyscan: async () => keyscanOutput,
+    })
+    expect(keys).toEqual([
+      { keyType: 'ssh-ed25519', fingerprint: fingerprintA },
+      { keyType: 'ssh-ed25519', fingerprint: fingerprintB },
+    ])
+    await expect(fetchVpsHostKeys('frp.example.com', { sshUser: 'root', sshPort: 22 }, {
+      runKeyscan: async () => '# nothing here\n',
+      runSshFetch: async () => '# nothing here either\n',
+    })).rejects.toThrow('vps_host_key_unavailable')
+  })
+
+  it('falls back to an authenticated host-key read when keyscan negotiates nothing', async () => {
+    const catOutput = `ssh-ed25519 ${keyA}\nssh-ed25519 ${keyB} comment-ignored\n`
+    let fetched = false
+    const keys = await fetchVpsHostKeys('frp.example.com', { sshUser: 'root', sshPort: 22 }, {
+      runKeyscan: async () => '# old binary negotiated nothing\n',
+      runSshFetch: async () => { fetched = true; return catOutput },
+    })
+    expect(fetched).toBe(true)
+    expect(keys).toEqual([
+      { keyType: 'ssh-ed25519', fingerprint: fingerprintA },
+      { keyType: 'ssh-ed25519', fingerprint: fingerprintB },
+    ])
+  })
+
+  it('pins only fully confirmed host keys and fails closed on rotation', () => {
+    const body = buildPinnedKnownHosts('frp.example.com', 22, keyscanOutput, [fingerprintA, fingerprintB])
+    expect(body).toBe(`frp.example.com ssh-ed25519 ${keyA}\nfrp.example.com ssh-ed25519 ${keyB}\n`)
+    expect(buildPinnedKnownHosts('frp.example.com', 2222, keyscanOutput, [fingerprintA, fingerprintB]))
+      .toContain('[frp.example.com]:2222 ssh-ed25519')
+    // A newly rotated key the user never confirmed aborts the deployment.
+    expect(() => buildPinnedKnownHosts('frp.example.com', 22, keyscanOutput, [fingerprintA])).toThrow('vps_host_key_mismatch')
+    expect(() => buildPinnedKnownHosts('frp.example.com', 22, '# nothing here\n', [fingerprintA])).toThrow('vps_host_key_unavailable')
+  })
+
+  it.runIf(process.platform !== 'win32')('generates shell scripts that pass sh syntax check', () => {
+    for (const script of [
+      vpsDeploymentScriptForTesting(settings),
+      vpsDeploymentScriptForTesting(parseFrpSettings({ ...settings, serverAddress: '1.2.3.4', publicOrigin: 'https://1.2.3.4' })),
+      createVpsUninstallScript({ serverPort: 7000 }),
+      createVpsUninstallScript({ serverPort: 7000, certName: '1.2.3.4' }),
+    ]) {
+      const result = spawnSync('sh', ['-n'], { input: script, encoding: 'utf8', timeout: 10_000, windowsHide: true })
+      expect(result.error).toBeUndefined()
+      expect(result.status).toBe(0)
+    }
+  })
   it('generates a restricted, pinned server installation script', () => {
     const script = vpsDeploymentScriptForTesting(settings)
     expect(script).toContain('frp_0.70.1_linux_amd64')
@@ -29,21 +124,26 @@ describe('VPS deployment', () => {
     expect(script).toContain('reverse_proxy 127.0.0.1:7080')
     expect(script).toContain('chmod 0644 /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list')
     expect(script).toContain('[ "$caddy_preexisting" = true ]')
+    // A redeploy must restart frps so the new token takes effect instead of
+    // leaving the previous generation running with stale credentials.
+    expect(script).toContain('systemctl restart dsh-mobile-frps.service')
+    expect(script).not.toContain('systemctl enable --now dsh-mobile-frps.service')
   })
 
   it('installs a public IP certificate and automatic renewal for an IPv4 origin', () => {
-    const ipSettings = parseFrpSettings({ ...settings, serverAddress: '203.0.113.10', publicOrigin: 'https://203.0.113.10' })
+    const ipSettings = parseFrpSettings({ ...settings, serverAddress: '1.2.3.4', publicOrigin: 'https://1.2.3.4' })
     const script = vpsDeploymentScriptForTesting(ipSettings)
-    expect(script).toContain('--preferred-profile shortlived --ip-address 203.0.113.10')
+    expect(script).toContain('--preferred-profile shortlived --ip-address 1.2.3.4')
     expect(script).toContain('certbot==5.8.0')
-    expect(script).toContain('default_sni 203.0.113.10')
+    expect(script).toContain('default_sni 1.2.3.4')
     expect(script).toContain('dsh-mobile-cert-renew.timer')
     expect(script).toContain('tls /var/lib/caddy/dsh-mobile-certs/fullchain.pem')
   })
 
   it('returns only redacted deployment checks after the remote script succeeds', async () => {
     let capturedScript = ''
-    const result = await deployVps(settings, { sshUser: 'root', sshPort: 22 }, {
+    const result = await deployVps(settings, sshInput(), {
+      runKeyscan: async () => keyscanOutput,
       runSsh: async (_input, host, script) => {
         expect(host).toBe('frp.example.com')
         capturedScript = script
@@ -61,8 +161,72 @@ describe('VPS deployment', () => {
     expect(capturedScript).toContain(settings.token)
   })
 
+  it('aborts before connecting when the server presents an unconfirmed key', async () => {
+    let connected = false
+    await expect(deployVps(settings, sshInput([fingerprintA]), {
+      runKeyscan: async () => keyscanOutput,
+      runSsh: async () => {
+        connected = true
+        return { stdout: 'DSH_MOBILE_DEPLOYMENT_OK\n', stderr: '' }
+      },
+    })).rejects.toThrow('vps_host_key_mismatch')
+    expect(connected).toBe(false)
+  })
+
+  it('generates a reviewable uninstall script that only touches owned artifacts', () => {
+    const script = createVpsUninstallScript({ serverPort: 7000 })
+    for (const owned of [
+      'dsh-mobile-frps.service',
+      'dsh-mobile-cert-renew.timer',
+      '/etc/dsh-mobile',
+      '/usr/local/libexec/dsh-mobile',
+      '/opt/dsh-mobile/certbot-venv',
+      '/usr/local/sbin/dsh-mobile-cert-renew',
+      '/var/lib/caddy/dsh-mobile-certs',
+      '# Managed by DSH Mobile',
+      'DSH Mobile',
+      'DSH_MOBILE_UNINSTALL_OK',
+    ]) expect(script).toContain(owned)
+    // Never touches unrelated Caddy content, other firewall rules, or other users.
+    expect(script).not.toMatch(/rm -rf \/(etc|usr|var)( |$)/u)
+    expect(script).toContain('Caddyfile 非 DSH Mobile 管理，保持原样')
+    expect(() => createVpsUninstallScript({ serverPort: 0 })).toThrow('frp_server_port_invalid')
+    expect(createVpsUninstallScript({ serverPort: 7000, certName: '1.2.3.4' })).toContain('certbot delete --cert-name')
+  })
+
+  it('removes server artifacts only after re-verifying confirmed host keys', async () => {
+    let executedScript = ''
+    const result = await uninstallVps('frp.example.com', { serverPort: 7000 }, sshInput(), {
+      runKeyscan: async () => keyscanOutput,
+      runRemoteScript: async (_input, host, script) => {
+        expect(host).toBe('frp.example.com')
+        executedScript = script
+        return {
+          stdout: 'DSH_MOBILE_CHECK services ok removed\nDSH_MOBILE_UNINSTALL_OK\n',
+          stderr: '',
+        }
+      },
+    })
+    expect(result.removed).toBe(true)
+    expect(result.checks).toEqual([{ id: 'services', status: 'ok', detail: 'removed' }])
+    expect(executedScript).toContain('dsh-mobile-frps.service')
+  })
+
+  it('refuses server cleanup when the keys rotated after confirmation', async () => {
+    let executed = false
+    await expect(uninstallVps('frp.example.com', { serverPort: 7000 }, sshInput([fingerprintA]), {
+      runKeyscan: async () => keyscanOutput,
+      runRemoteScript: async () => {
+        executed = true
+        return { stdout: 'DSH_MOBILE_UNINSTALL_OK\n', stderr: '' }
+      },
+    })).rejects.toThrow('vps_host_key_mismatch')
+    expect(executed).toBe(false)
+  })
+
   it('redacts the token when a remote check reports it', async () => {
-    await expect(deployVps(settings, { sshUser: 'root', sshPort: 22 }, {
+    await expect(deployVps(settings, sshInput(), {
+      runKeyscan: async () => keyscanOutput,
       runSsh: async () => ({
         stdout: `DSH_MOBILE_CHECK remote-command error ${settings.token}\n`,
         stderr: '',

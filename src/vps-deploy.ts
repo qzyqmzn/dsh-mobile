@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { lstat, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { validateFrpPublicOrigin, validateFrpServerAddress, validateFrpServerPort, validateFrpToken, type FrpSettings } from './frp-config.js'
+import { isGloballyRoutableIpv4 } from './network.js'
 
 const FRP_VERSION = '0.70.1'
 const SSH_TIMEOUT_MS = 300_000
@@ -27,6 +28,17 @@ export interface VpsDeploymentInput {
   readonly sshUser: string
   readonly sshPort: number
   readonly sshKeyPath?: string
+  /**
+   * User-confirmed SHA256 host-key fingerprints (`SHA256:…`, one per server key).
+   * The deployment aborts unless every key the server currently presents is confirmed.
+   */
+  readonly hostFingerprints: readonly string[]
+}
+
+/** One SSH server host key with its OpenSSH-style SHA256 fingerprint. */
+export interface VpsHostKey {
+  readonly keyType: string
+  readonly fingerprint: string
 }
 
 export interface VpsDeploymentCheck {
@@ -45,6 +57,9 @@ export interface VpsDeploymentResult {
 
 export interface VpsDeploymentOptions {
   readonly runSsh?: (input: VpsDeploymentInput, serverAddress: string, script: string) => Promise<{ stdout: string; stderr: string }>
+  readonly runKeyscan?: (input: { readonly sshUser: unknown; readonly sshPort: unknown }, serverAddress: string) => Promise<string>
+  readonly runSshFetch?: (input: VpsSshFetchInput, serverAddress: string) => Promise<string>
+  readonly runRemoteScript?: (input: VpsDeploymentInput, serverAddress: string, script: string) => Promise<{ stdout: string; stderr: string }>
   readonly log?: (event: string, fields: Readonly<Record<string, string | number | boolean>>) => void
 }
 
@@ -56,6 +71,17 @@ class VpsSshError extends Error {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+/**
+ * Reject loopback, private, and other non-routable IPv4 literals as VPS SSH
+ * targets. A self-hosted deployment always addresses a public server; the
+ * shared frpc settings stay permissive so local loopback test rigs keep working.
+ */
+function assertPublicSshTarget(serverAddress: string): void {
+  if (isIP(serverAddress) === 4 && !isGloballyRoutableIpv4(serverAddress)) {
+    throw new Error('vps_server_not_public')
+  }
 }
 
 function validSshUser(value: unknown): string {
@@ -81,17 +107,229 @@ function validSshKeyPath(value: unknown): string | undefined {
 export function parseVpsDeploymentInput(value: unknown): VpsDeploymentInput {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('vps_deploy_input_invalid')
   const record = value as Record<string, unknown>
-  if (Reflect.ownKeys(record).some(key => !['sshUser', 'sshPort', 'sshKeyPath'].includes(String(key)))) throw new Error('vps_deploy_input_invalid')
+  if (Reflect.ownKeys(record).some(key => !['sshUser', 'sshPort', 'sshKeyPath', 'hostFingerprints'].includes(String(key)))) {
+    throw new Error('vps_deploy_input_invalid')
+  }
   const sshKeyPath = validSshKeyPath(record.sshKeyPath)
   return Object.freeze({
     sshUser: validSshUser(record.sshUser),
     sshPort: validSshPort(record.sshPort),
     ...(sshKeyPath === undefined ? {} : { sshKeyPath }),
+    hostFingerprints: Object.freeze(parseVpsHostFingerprints(record.hostFingerprints)),
   })
 }
 
+/** Validate user-confirmed SHA256 host-key fingerprints (`SHA256:…`). */
+export function parseVpsHostFingerprints(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 8) throw new Error('vps_host_key_unconfirmed')
+  const fingerprints: string[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !/^SHA256:[A-Za-z0-9+/]{40,60}={0,2}$/u.test(entry) || entry.length > 96) {
+      throw new Error('vps_host_key_unconfirmed')
+    }
+    fingerprints.push(entry)
+  }
+  return [...new Set(fingerprints)]
+}
+
+const SUPPORTED_HOST_KEY_TYPES = new Set([
+  'ssh-rsa',
+  'ecdsa-sha2-nistp256',
+  'ecdsa-sha2-nistp384',
+  'ecdsa-sha2-nistp521',
+  'ssh-ed25519',
+])
+
+/** Format a raw host public key the way OpenSSH displays it (`SHA256:…` without padding). */
+export function fingerprintHostPublicKey(keyType: string, base64Key: string): string {
+  if (!SUPPORTED_HOST_KEY_TYPES.has(keyType)) throw new Error('vps_host_key_unsupported_type')
+  if (!/^[A-Za-z0-9+/]+={0,2}$/u.test(base64Key) || base64Key.length < 24 || base64Key.length > 1_024) {
+    throw new Error('vps_host_key_invalid')
+  }
+  const raw = Buffer.from(base64Key, 'base64')
+  if (raw.length < 16 || raw.length > 768) throw new Error('vps_host_key_invalid')
+  return `SHA256:${createHash('sha256').update(raw).digest('base64').replace(/=+$/u, '')}`
+}
+
+function parseKeyscanOutput(output: string): Array<{ keyType: string; base64Key: string }> {
+  const keys: Array<{ keyType: string; base64Key: string }> = []
+  for (const line of output.split(/\r?\n/u)) {
+    const trimmed = line.trim()
+    if (trimmed === '' || trimmed.startsWith('#')) continue
+    // The host field is optional: ssh-cat fallback lines carry only type and key.
+    // It is discarded anyway; pinned known_hosts lines are rebuilt from the
+    // validated server address, so accepting host-less lines is safe.
+    const match = /^(?:\S+\s+)?(ssh-rsa|ecdsa-sha2-nistp\d+|ssh-ed25519)\s+([A-Za-z0-9+/]+={0,2})(\s|$)/u.exec(trimmed)
+    if (match?.[1] === undefined || match[2] === undefined) throw new Error('vps_host_key_invalid')
+    keys.push({ keyType: match[1], base64Key: match[2] })
+  }
+  return keys
+}
+
+/** Base SSH options shared by long deployment sessions. Keepalives survive NAT
+ *  middleboxes during minute-long apt/pip phases; host identity stays pinned. */
+function sshSessionOptions(knownHostsFile: string): string[] {
+  return [
+    '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15',
+    '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=8',
+    '-o', 'StrictHostKeyChecking=yes', `-o UserKnownHostsFile=${knownHostsFile}`,
+  ]
+}
+
+/** Lenient scan probe: garbage fails the whole fetch, comment-only output falls back. */
+function tryParseKeyscanOutput(output: string): Array<{ keyType: string; base64Key: string }> | undefined {
+  try {
+    return parseKeyscanOutput(output)
+  } catch {
+    return undefined
+  }
+}
+
+async function gitBundledKeyscan(): Promise<string | undefined> {
+  if (process.platform !== 'win32') return undefined
+  const programFiles = process.env['ProgramFiles'] ?? 'C:\\Program Files'
+  const candidate = join(programFiles, 'Git', 'usr', 'bin', 'ssh-keyscan.exe')
+  try {
+    const entry = await lstat(candidate)
+    if (!entry.isFile()) return undefined
+  } catch {
+    return undefined
+  }
+  return candidate
+}
+
+async function defaultRunKeyscan(input: { readonly sshUser: unknown; readonly sshPort: unknown }, serverAddress: string): Promise<string> {
+  const keyscan = process.platform === 'win32' ? 'ssh-keyscan.exe' : 'ssh-keyscan'
+  const args = ['-T', '10', '-p', String(input.sshPort), '-t', 'rsa,ecdsa,ed25519', serverAddress]
+  const first = await runProcess(keyscan, args, undefined, 30_000).catch(() => undefined)
+  if (first !== undefined && tryParseKeyscanOutput(first.stdout)?.length) return first.stdout
+  // Old Windows keyscan binaries fail KEX against modern servers; retry with the
+  // Git for Windows copy when present before reporting unavailability.
+  const bundled = await gitBundledKeyscan()
+  if (bundled !== undefined) {
+    const second = await runProcess(bundled, args, undefined, 30_000).catch(() => undefined)
+    if (second !== undefined && tryParseKeyscanOutput(second.stdout)?.length) return second.stdout
+  }
+  if (first === undefined) throw new VpsSshError('vps_host_key_unavailable', '', 'ssh-keyscan did not run')
+  return first.stdout
+}
+
+export interface VpsSshFetchInput {
+  readonly sshUser: unknown
+  readonly sshPort: unknown
+  readonly sshKeyPath?: unknown
+}
+
+/**
+ * Read the server's public host keys over an authenticated connection with a
+ * throwaway known_hosts file. Fallback for keyscan binaries that cannot
+ * negotiate with modern servers; output feeds the same confirm-and-pin pipeline.
+ */
+async function defaultRunSshFetch(input: VpsSshFetchInput, serverAddress: string): Promise<string> {
+  const ssh = process.platform === 'win32' ? 'ssh.exe' : 'ssh'
+  const sshUser = validSshUser(input.sshUser)
+  const sshPort = validSshPort(input.sshPort)
+  const sshKeyPath = validSshKeyPath(input.sshKeyPath)
+  const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null'
+  const args = [
+    '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15',
+    '-o', 'StrictHostKeyChecking=no', `-o UserKnownHostsFile=${nullDevice}`,
+    ...(sshKeyPath === undefined ? [] : ['-i', sshKeyPath]),
+    '-p', String(sshPort), `${sshUser}@${serverAddress}`, 'cat /etc/ssh/ssh_host_*_key.pub',
+  ]
+  const { stdout } = await runProcess(ssh, args, undefined, 30_000).catch((error: unknown) => {
+    throw new VpsSshError('vps_host_key_unavailable', '', error instanceof Error ? error.message : String(error))
+  })
+  const lines: string[] = []
+  for (const line of stdout.split(/\r?\n/u)) {
+    const match = /^(ssh-rsa|ecdsa-sha2-nistp\d+|ssh-ed25519)\s+([A-Za-z0-9+/]+={0,2})(\s|$)/u.exec(line.trim())
+    if (match?.[1] !== undefined && match[2] !== undefined) lines.push(`${serverAddress} ${match[1]} ${match[2]}`)
+  }
+  return lines.length === 0 ? stdout : `${lines.join('\n')}\n`
+}
+
+/**
+ * Scan host keys with keyscan first, then fall back to an authenticated read
+ * when the local keyscan binary cannot negotiate with the server. Both paths
+ * feed the same confirm-and-pin pipeline, so a fallback never weakens the
+ * user-confirmation gate.
+ */
+async function scanHostKeys(
+  input: VpsSshFetchInput,
+  serverAddress: string,
+  options: VpsDeploymentOptions,
+): Promise<string> {
+  const runKeyscan = options.runKeyscan ?? defaultRunKeyscan
+  const scanned = await runKeyscan({ sshUser: input.sshUser, sshPort: input.sshPort }, serverAddress)
+  if (tryParseKeyscanOutput(scanned)?.length) return scanned
+  options.log?.('host-keys-keyscan-empty', { serverAddress })
+  const runSshFetch = options.runSshFetch ?? defaultRunSshFetch
+  const fetched = await runSshFetch(input, serverAddress)
+  if (tryParseKeyscanOutput(fetched)?.length) {
+    options.log?.('host-keys-ssh-fallback', { serverAddress })
+    return fetched
+  }
+  throw new Error('vps_host_key_unavailable')
+}
+
+/**
+ * Fetch the server's current host keys and return them with OpenSSH-style
+ * fingerprints for the user to confirm out of band (for example against the
+ * VPS console) before any destructive or authenticated deployment step.
+ */
+export async function fetchVpsHostKeys(
+  serverAddress: string,
+  input: VpsSshFetchInput,
+  options: VpsDeploymentOptions = {},
+): Promise<readonly VpsHostKey[]> {
+  const address = validateFrpServerAddress(serverAddress)
+  assertPublicSshTarget(address)
+  const sshUser = validSshUser(input.sshUser)
+  const sshPort = validSshPort(input.sshPort)
+  const output = await scanHostKeys({ sshUser, sshPort, sshKeyPath: input.sshKeyPath }, address, options)
+  const keys = parseKeyscanOutput(output)
+  if (keys.length === 0) throw new Error('vps_host_key_unavailable')
+  const seen = new Set<string>()
+  const hostKeys: VpsHostKey[] = []
+  for (const key of keys) {
+    const fingerprint = fingerprintHostPublicKey(key.keyType, key.base64Key)
+    if (seen.has(fingerprint)) continue
+    seen.add(fingerprint)
+    hostKeys.push(Object.freeze({ keyType: key.keyType, fingerprint }))
+  }
+  options.log?.('host-keys-fetched', { serverAddress: address, keyTypes: hostKeys.length })
+  return Object.freeze(hostKeys)
+}
+
+/**
+ * Verify that every host key the server currently presents was confirmed by the
+ * user, then return a pinned known_hosts body. Fails closed on rotation,
+ * replacement, or unexpected extra keys.
+ */
+export function buildPinnedKnownHosts(
+  serverAddress: string,
+  sshPort: number,
+  keyscanOutput: string,
+  confirmedFingerprints: readonly string[],
+): string {
+  const address = validateFrpServerAddress(serverAddress)
+  const port = validSshPort(sshPort)
+  const confirmed = new Set(parseVpsHostFingerprints([...confirmedFingerprints]))
+  const keys = parseKeyscanOutput(keyscanOutput)
+  if (keys.length === 0) throw new Error('vps_host_key_unavailable')
+  const host = port === 22 ? address : `[${address}]:${port}`
+  const lines: string[] = []
+  for (const key of keys) {
+    const fingerprint = fingerprintHostPublicKey(key.keyType, key.base64Key)
+    if (!confirmed.has(fingerprint)) throw new Error('vps_host_key_mismatch')
+    lines.push(`${host} ${key.keyType} ${key.base64Key}`)
+  }
+  return `${lines.join('\n')}\n`
+}
+
 function safeOutput(value: string, token: string): string {
-  return value.replaceAll(token, '<redacted>').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '').slice(0, 8_192).trim()
+  const redacted = token === '' ? value : value.replaceAll(token, '<redacted>')
+  return redacted.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '').slice(0, 8_192).trim()
 }
 
 function parseChecks(stdout: string, stderr: string, token: string): readonly VpsDeploymentCheck[] {
@@ -119,7 +357,7 @@ function deploymentScript(settings: FrpSettings): string {
     '',
   ].join('\n')
   const publicHost = new URL(settings.publicOrigin).hostname
-  const publicIp = isIP(publicHost) === 4
+  const publicIp = isGloballyRoutableIpv4(publicHost)
   const caddy = publicIp
     ? `# Managed by DSH Mobile\n{\n  default_sni ${publicHost}\n}\n\nhttp://${publicHost} {\n  redir https://${publicHost}{uri} permanent\n}\n\nhttps://${publicHost} {\n  tls /var/lib/caddy/dsh-mobile-certs/fullchain.pem /var/lib/caddy/dsh-mobile-certs/privkey.pem\n  reverse_proxy 127.0.0.1:7080\n}\n`
     : `# Managed by DSH Mobile\n${publicHost} {\n  reverse_proxy 127.0.0.1:7080\n}\n`
@@ -294,7 +532,11 @@ ${caddy}DSH_MOBILE_CADDY
 chmod 0644 /etc/caddy/Caddyfile
 caddy validate --config /etc/caddy/Caddyfile
 systemctl daemon-reload
-systemctl enable --now dsh-mobile-frps.service
+# Restart (not just start) so a redeploy over a running previous generation
+# actually picks up the new frps token and config instead of keeping the old
+# process alive with stale credentials.
+systemctl enable dsh-mobile-frps.service
+systemctl restart dsh-mobile-frps.service
 systemctl enable --now caddy.service
 ${publicIp ? 'systemctl enable --now dsh-mobile-cert-renew.timer' : ''}
 systemctl reload caddy.service || systemctl restart caddy.service
@@ -353,11 +595,14 @@ async function defaultRunSsh(
   input: VpsDeploymentInput,
   serverAddress: string,
   script: string,
+  knownHostsFile: string,
   log?: VpsDeploymentOptions['log'],
 ): Promise<{ stdout: string; stderr: string }> {
   const ssh = process.platform === 'win32' ? 'ssh.exe' : 'ssh'
   const scp = process.platform === 'win32' ? 'scp.exe' : 'scp'
-  const common = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'StrictHostKeyChecking=accept-new']
+  // The server identity is pinned to the user-confirmed fingerprints captured
+  // before deployment. Unknown or rotated keys abort instead of being accepted.
+  const common = sshSessionOptions(knownHostsFile)
   if (input.sshKeyPath !== undefined) common.push('-i', input.sshKeyPath)
   const target = `${input.sshUser}@${serverAddress}`
   const probe = await runProcess(ssh, [...common, '-p', String(input.sshPort), target, 'uname -m'])
@@ -391,12 +636,32 @@ export async function deployVps(settings: FrpSettings, input: VpsDeploymentInput
   const token = validateFrpToken(settings.token)
   const publicOrigin = validateFrpPublicOrigin(settings.publicOrigin)
   if (isIP(serverAddress) !== 0 && serverAddress.includes(':')) throw new Error('vps_ipv6_ssh_not_supported')
+  assertPublicSshTarget(serverAddress)
   const parsedInput = parseVpsDeploymentInput(input)
   if (parsedInput.sshKeyPath !== undefined) {
     const entry = await lstat(parsedInput.sshKeyPath).catch(() => undefined)
     if (entry === undefined || !entry.isFile() || entry.isSymbolicLink()) throw new Error('vps_ssh_key_invalid')
   }
-  const runSsh = options.runSsh ?? ((sshInput, host, scriptBody) => defaultRunSsh(sshInput, host, scriptBody, options.log))
+  // Pin the server identity before any authenticated connection: re-scan the
+  // host keys now and require every presented key to be user-confirmed, so a
+  // rotation between the UI preview and this deployment aborts safely.
+  const keyscanOutput = await scanHostKeys(
+    { sshUser: parsedInput.sshUser, sshPort: parsedInput.sshPort, sshKeyPath: parsedInput.sshKeyPath },
+    serverAddress,
+    options,
+  )
+  const knownHostsBody = buildPinnedKnownHosts(serverAddress, parsedInput.sshPort, keyscanOutput, parsedInput.hostFingerprints)
+  options.log?.('host-keys-verified', { serverAddress })
+  const runSsh = options.runSsh ?? (async (sshInput, host, scriptBody) => {
+    const workDirectory = await mkdtemp(join(tmpdir(), 'dsh-mobile-known-hosts-'))
+    try {
+      const knownHostsFile = join(workDirectory, 'known_hosts')
+      await writeFile(knownHostsFile, knownHostsBody, { encoding: 'utf8', mode: 0o600 })
+      return await defaultRunSsh(sshInput, host, scriptBody, knownHostsFile, options.log)
+    } finally {
+      await rm(workDirectory, { recursive: true, force: true })
+    }
+  })
   options.log?.('validated', { serverAddress, serverPort, publicOrigin, sshUser: parsedInput.sshUser, sshPort: parsedInput.sshPort, keyProvided: parsedInput.sshKeyPath !== undefined })
   let result: { stdout: string; stderr: string }
   try {
@@ -423,4 +688,164 @@ export async function deployVps(settings: FrpSettings, input: VpsDeploymentInput
 
 export function vpsDeploymentScriptForTesting(settings: FrpSettings): string {
   return deploymentScript(settings)
+}
+
+export interface VpsUninstallInput {
+  readonly serverPort: unknown
+  /** Let's Encrypt certificate name to delete (public-IPv4 mode); omit for domain mode. */
+  readonly certName?: unknown
+}
+
+export interface VpsUninstallResult {
+  readonly version: 1
+  readonly removed: boolean
+  readonly serverAddress: string
+  readonly checks: readonly VpsDeploymentCheck[]
+}
+
+function validCertName(value: unknown): string | undefined {
+  if (value === undefined || value === '') return undefined
+  if (typeof value !== 'string' || value.length > 253 || !/^[a-z0-9.-]+$/u.test(value)) throw new Error('vps_cert_name_invalid')
+  return value.toLowerCase()
+}
+
+/**
+ * Build a reviewable uninstall script that removes only DSH Mobile-owned
+ * server artifacts: its systemd units, config, binaries, venv, renew helper,
+ * managed Caddy site, owned UFW rules, and optionally its IP certificate.
+ * Existing non-DSH-Mobile Caddy content and firewall rules are never touched.
+ */
+export function createVpsUninstallScript(input: VpsUninstallInput): string {
+  const serverPort = validateFrpServerPort(input.serverPort)
+  const certName = validCertName(input.certName)
+  const certCleanup = certName === undefined ? '' : `
+if [ -x /opt/dsh-mobile/certbot-venv/bin/certbot ]; then
+  /opt/dsh-mobile/certbot-venv/bin/certbot delete --cert-name ${shellQuote(certName)} --non-interactive || true
+fi
+`
+  return `#!/bin/sh
+# DSH Mobile VPS uninstall. Review before running: only files, services, and
+# firewall rules created by the DSH Mobile deployment are removed.
+set -eu
+umask 077
+
+fail() { echo "DSH_MOBILE_CHECK remote-command error $1" >&2; exit 1; }
+check() { echo "DSH_MOBILE_CHECK $1 $2 $3"; }
+
+[ "$(id -u)" = "0" ] || fail "请使用 root SSH 账号。"
+command -v systemctl >/dev/null 2>&1 || fail "VPS 不支持 systemd。"
+
+systemctl disable --now dsh-mobile-cert-renew.timer >/dev/null 2>&1 || true
+systemctl disable --now dsh-mobile-frps.service >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/dsh-mobile-frps.service
+rm -f /etc/systemd/system/dsh-mobile-cert-renew.service
+rm -f /etc/systemd/system/dsh-mobile-cert-renew.timer
+systemctl daemon-reload
+check services ok "已停止并删除 dsh-mobile-frps 服务与证书续期定时器。"
+${certCleanup}
+rm -rf /etc/dsh-mobile
+rm -rf /usr/local/libexec/dsh-mobile
+rm -rf /opt/dsh-mobile/certbot-venv
+rm -f /usr/local/sbin/dsh-mobile-cert-renew
+rm -rf /var/lib/caddy/dsh-mobile-certs
+check files ok "已删除 DSH Mobile 配置、二进制与证书文件。"
+
+if [ -f /etc/caddy/Caddyfile ] && grep -q '^# Managed by DSH Mobile$' /etc/caddy/Caddyfile; then
+  printf '# DSH Mobile removed its site. Restore your own Caddyfile or reinstall the Caddy defaults.\\n' > /etc/caddy/Caddyfile
+  chmod 0644 /etc/caddy/Caddyfile
+  if command -v caddy >/dev/null 2>&1; then
+    caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy.service || systemctl restart caddy.service || true
+  fi
+  check caddy ok "已清空 DSH Mobile 管理的 Caddy 站点；请按需恢复自己的配置。"
+else
+  check caddy ok "Caddyfile 非 DSH Mobile 管理，保持原样。"
+fi
+
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+  for rule in $(ufw status numbered 2>/dev/null | grep 'DSH Mobile' | sed -E 's/^\\[ *([0-9]+)\\].*/\\1/' | sort -rn); do
+    yes | ufw delete "$rule" >/dev/null 2>&1 || true
+  done
+  check firewall ok "已删除带 DSH Mobile 标记的 UFW 规则（FRP 控制端口 ${String(serverPort)}、80、443）。"
+else
+  check firewall ok "UFW 未启用或无需调整。"
+fi
+
+if id dsh-mobile >/dev/null 2>&1; then
+  if pgrep -u dsh-mobile >/dev/null 2>&1; then
+    fail "dsh-mobile 用户仍有运行中的进程，已保留该用户；请先停止相关进程后重试。"
+  fi
+  userdel dsh-mobile || fail "删除 dsh-mobile 系统用户失败。"
+  check account ok "已删除 dsh-mobile 系统用户。"
+else
+  check account ok "dsh-mobile 系统用户不存在，无需删除。"
+fi
+
+echo DSH_MOBILE_UNINSTALL_OK
+`
+}
+
+async function runRemoteScript(
+  input: VpsDeploymentInput,
+  serverAddress: string,
+  script: string,
+  environment: Readonly<Record<string, string>>,
+  knownHostsFile: string,
+  log?: VpsDeploymentOptions['log'],
+): Promise<{ stdout: string; stderr: string }> {
+  const ssh = process.platform === 'win32' ? 'ssh.exe' : 'ssh'
+  const parsedInput = parseVpsDeploymentInput(input)
+  const common = sshSessionOptions(knownHostsFile)
+  if (parsedInput.sshKeyPath !== undefined) common.push('-i', parsedInput.sshKeyPath)
+  const target = `${parsedInput.sshUser}@${serverAddress}`
+  const remoteCommand = parsedInput.sshUser === 'root' ? 'sh -s' : 'sudo -n sh -s'
+  const envPrefix = Object.entries(environment).map(([key, value]) => `${key}=${shellQuote(value)}`).join(' ')
+  log?.('uninstall-ssh-start', { serverAddress })
+  return await runProcess(ssh, [...common, '-p', String(parsedInput.sshPort), target, `${envPrefix} ${remoteCommand}`.trim()], script)
+}
+
+/** Remove DSH Mobile-owned server artifacts over a pinned SSH connection. */
+export async function uninstallVps(
+  serverAddress: string,
+  uninstall: VpsUninstallInput,
+  input: VpsDeploymentInput,
+  options: VpsDeploymentOptions = {},
+): Promise<VpsUninstallResult> {
+  const address = validateFrpServerAddress(serverAddress)
+  assertPublicSshTarget(address)
+  const parsedInput = parseVpsDeploymentInput(input)
+  // Identity is verified with a fresh scan immediately before this destructive
+  // action: every presented key must still be user-confirmed.
+  const keyscanOutput = await scanHostKeys(
+    { sshUser: parsedInput.sshUser, sshPort: parsedInput.sshPort, sshKeyPath: parsedInput.sshKeyPath },
+    address,
+    options,
+  )
+  const knownHostsBody = buildPinnedKnownHosts(address, parsedInput.sshPort, keyscanOutput, parsedInput.hostFingerprints)
+  options.log?.('host-keys-verified', { serverAddress: address })
+  const script = createVpsUninstallScript(uninstall)
+  options.log?.('uninstall-start', { serverAddress: address })
+  const runRemote = options.runRemoteScript ?? (async (sshInput, host, scriptBody) => {
+    const workDirectory = await mkdtemp(join(tmpdir(), 'dsh-mobile-known-hosts-'))
+    try {
+      const knownHostsFile = join(workDirectory, 'known_hosts')
+      await writeFile(knownHostsFile, knownHostsBody, { encoding: 'utf8', mode: 0o600 })
+      return await runRemoteScript(sshInput, host, scriptBody, {}, knownHostsFile, options.log)
+    } finally {
+      await rm(workDirectory, { recursive: true, force: true })
+    }
+  })
+  let result: { stdout: string; stderr: string }
+  try {
+    result = await runRemote(parsedInput, address, script)
+  } catch (error) {
+    options.log?.('uninstall-failed', { code: error instanceof Error ? error.message : 'unknown' })
+    throw error
+  }
+  const checks = parseChecks(result.stdout, result.stderr, '')
+  for (const check of checks) options.log?.('remote-check', { id: check.id, status: check.status, detail: check.detail })
+  if (!result.stdout.includes('DSH_MOBILE_UNINSTALL_OK')) {
+    if (checks.length === 0) throw new Error('vps_uninstall_failed')
+    throw new Error(`vps_uninstall_failed:${checks.map(check => check.detail).join(' ')}`)
+  }
+  return Object.freeze({ version: 1, removed: true, serverAddress: address, checks })
 }

@@ -12,7 +12,6 @@ export type {
   SessionAuthorization,
 } from './access.js'
 export { Config, parseControlFile, parseGatewayConfig } from './config.js'
-export { assertSupportedDshVersion, SUPPORTED_DSH_VERSIONS } from './compatibility.js'
 export type {
   DisabledTlsConfig,
   PluginConfig,
@@ -63,6 +62,7 @@ export {
 } from './http-security.js'
 export {
   addressAllowed,
+  isGloballyRoutableIpv4,
   isLoopbackAddress,
   parseAuthority,
   parseCidr,

@@ -17,14 +17,13 @@ val releaseSigningConfigured = listOf(
 android {
     namespace = "io.github.sayach.dshmobile"
     compileSdk = 36
-    buildToolsVersion = "36.0.0"
 
     defaultConfig {
         applicationId = "io.github.sayach.dshmobile"
         minSdk = 29
         targetSdk = 36
-        versionCode = 50
-        versionName = "0.3.5"
+        versionCode = 52
+        versionName = "0.3.7"
     }
 
     signingConfigs {

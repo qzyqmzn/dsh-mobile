@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { isIP } from 'node:net'
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { isGloballyRoutableIpv4 } from './network.js'
 import { restrictPrivateFile } from './private-file.js'
 import { createRestrictedFrpServerTemplate, FRP_VHOST_HTTP_PORT } from './frp-template.js'
 
@@ -67,6 +68,9 @@ export function validateFrpPublicOrigin(value: unknown): string {
     || url.username !== '' || url.password !== '' || (isIP(publicHost) !== 4 && !hostname(publicHost))) {
     throw new Error('frp_public_origin_invalid')
   }
+  // Documentation and other non-routable IPv4 literals (e.g. 203.0.113.10)
+  // can never be a real VPS endpoint; reject them instead of deploying certs.
+  if (isIP(publicHost) === 4 && !isGloballyRoutableIpv4(publicHost)) throw new Error('frp_public_origin_invalid')
   return url.origin
 }
 

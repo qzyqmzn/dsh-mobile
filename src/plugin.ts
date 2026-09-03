@@ -11,7 +11,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { parseControlFile, parseGatewayConfig, type PluginConfig, type ResolvedGatewayConfig } from './config.js'
 import { collectConnectionDiagnostics } from './diagnostics.js'
 import { MOBILE_CUSTOMIZATION_GUIDE } from './mobile-guide.js'
-import { deployVps, parseVpsDeploymentInput } from './vps-deploy.js'
+import { createVpsUninstallScript, deployVps, fetchVpsHostKeys, parseVpsDeploymentInput, uninstallVps } from './vps-deploy.js'
 import {
   FollowingMobileAccessRuntime,
   JsonMobileAccessControlStore,
@@ -82,10 +82,15 @@ function upstreamAuthenticatedUrl(ctx: Context, upstreamOrigin: URL): string | u
     : undefined
 }
 
-function installedDshVersion(): unknown {
-  const manifest = createRequire(import.meta.url)('@deepseek-ai/dsh-host-webserver/package.json') as unknown
-  if (manifest === null || typeof manifest !== 'object') return undefined
-  return (manifest as { readonly version?: unknown }).version
+function installedDshVersion(): string {
+  try {
+    const manifest = createRequire(import.meta.url)('@deepseek-ai/dsh-host-webserver/package.json') as unknown
+    if (manifest === null || typeof manifest !== 'object') return 'unknown'
+    const version = (manifest as { readonly version?: unknown }).version
+    return typeof version === 'string' && version !== '' ? version : 'unknown'
+  } catch {
+    return 'unknown'
+  }
 }
 
 function mapAdminError(error: unknown): HttpError {
@@ -268,8 +273,7 @@ function remoteControlPayload(
 
 /** Mount the resident control route and its optional authenticated LAN gateway. */
 export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
-  const dshVersionValue = installedDshVersion()
-  const dshVersion = typeof dshVersionValue === 'string' ? dshVersionValue : 'unknown'
+  const dshVersion = installedDshVersion()
   const loaded = await loadSetup(config)
   const mobileAccess: MobileAccessService = createMobileAccessService(ctx)
   const template = loopbackTemplate(loaded)
@@ -556,11 +560,28 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
           sendJson(response, 200, remotePayload(), false)
           return
         }
+        if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/frp/vps/host-keys`) {
+          const body = await readJsonObject(request, 8192)
+          const serverAddress = typeof body.serverAddress === 'string' ? body.serverAddress : ''
+          logger.info('vps host keys requested host=%s sshUser=%s sshPort=%d',
+            serverAddress, String(body.sshUser), Number(body.sshPort))
+          const hostKeys = await fetchVpsHostKeys(serverAddress, {
+            sshUser: body.sshUser,
+            sshPort: body.sshPort,
+            ...(body.sshKeyPath === undefined || body.sshKeyPath === '' ? {} : { sshKeyPath: body.sshKeyPath }),
+          }, {
+            log(event, fields) { logger.info('vps host keys event=%s fields=%o', event, fields) },
+          })
+          for (const key of hostKeys) logger.info('vps host key host=%s type=%s fingerprint=%s', serverAddress, key.keyType, key.fingerprint)
+          sendJson(response, 200, { ...remotePayload(), vpsHostKeys: hostKeys }, false)
+          return
+        }
         if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/frp/vps/deploy`) {
           const body = await readJsonObject(request, 8192)
           if (body.confirm !== true) throw new HttpError(400, 'bad_request')
-          logger.info('vps deploy requested host=%s port=%d sshUser=%s sshPort=%d keyProvided=%s',
-            String(body.serverAddress), Number(body.serverPort), String(body.sshUser), Number(body.sshPort), body.sshKeyPath === undefined ? 'false' : 'true')
+          logger.info('vps deploy requested host=%s port=%d sshUser=%s sshPort=%d keyProvided=%s fingerprints=%s',
+            String(body.serverAddress), Number(body.serverPort), String(body.sshUser), Number(body.sshPort), body.sshKeyPath === undefined ? 'false' : 'true',
+            Array.isArray(body.hostFingerprints) ? String(body.hostFingerprints.length) : 'none')
           const deployment = await remoteProviders.mutate(async () => {
             const settings = parseFrpSettings({
               serverAddress: body.serverAddress,
@@ -572,6 +593,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
               sshUser: body.sshUser,
               sshPort: body.sshPort,
               ...(body.sshKeyPath === undefined ? {} : { sshKeyPath: body.sshKeyPath }),
+              hostFingerprints: body.hostFingerprints,
             }), {
               log(event, fields) { logger.info('vps deploy event=%s fields=%o', event, fields) },
             })
@@ -580,6 +602,38 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
             return result
           })
           sendJson(response, 200, { ...remotePayload(), vpsDeployment: deployment }, false)
+          return
+        }
+        if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/frp/vps/uninstall-script`) {
+          const body = await readJsonObject(request, 4096)
+          const script = createVpsUninstallScript({
+            serverPort: body.serverPort,
+            ...(body.certName === undefined || body.certName === '' ? {} : { certName: body.certName }),
+          })
+          sendJson(response, 200, { ...remotePayload(), vpsUninstallScript: script }, false)
+          return
+        }
+        if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/frp/vps/uninstall`) {
+          const body = await readJsonObject(request, 8192)
+          if (body.confirm !== true) throw new HttpError(400, 'bad_request')
+          logger.info('vps uninstall requested host=%s sshUser=%s sshPort=%d',
+            String(body.serverAddress), String(body.sshUser), Number(body.sshPort))
+          const removal = await remoteProviders.mutate(async () => {
+            const result = await uninstallVps(String(body.serverAddress), {
+              serverPort: body.serverPort,
+              ...(body.certName === undefined || body.certName === '' ? {} : { certName: body.certName }),
+            }, parseVpsDeploymentInput({
+              sshUser: body.sshUser,
+              sshPort: body.sshPort,
+              ...(body.sshKeyPath === undefined ? {} : { sshKeyPath: body.sshKeyPath }),
+              hostFingerprints: body.hostFingerprints,
+            }), {
+              log(event, fields) { logger.info('vps uninstall event=%s fields=%o', event, fields) },
+            })
+            logger.info('vps uninstall completed host=%s checks=%d', result.serverAddress, result.checks.length)
+            return result
+          })
+          sendJson(response, 200, { ...remotePayload(), vpsUninstall: removal }, false)
           return
         }
         if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/frp/component/purge`) {
