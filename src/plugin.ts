@@ -174,13 +174,13 @@ async function loadSetup(config: PluginConfig): Promise<LoadedSetup> {
   }
 }
 
-function loopbackTemplate(loaded: LoadedSetup): ResolvedGatewayConfig {
+function loopbackTemplate(loaded: LoadedSetup, webServerPort: number): ResolvedGatewayConfig {
   const base = withoutSetupKeys(loaded.config)
   return parseGatewayConfig({
     ...base,
     ...(loaded.kind === 'managed'
       ? { upstreamOrigin: loaded.setup.upstreamOrigin }
-      : loaded.config.upstreamOrigin === undefined ? {} : { upstreamOrigin: loaded.config.upstreamOrigin }),
+      : { upstreamOrigin: loaded.config.upstreamOrigin ?? `http://127.0.0.1:${String(webServerPort)}` }),
     listenHost: '127.0.0.1',
     listenPort: 0,
     publicAuthorities: ['127.0.0.1'],
@@ -268,7 +268,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   const dshVersion = installedDshVersion()
   const loaded = await loadSetup(config)
   const mobileAccess: MobileAccessService = createMobileAccessService(ctx)
-  const template = loopbackTemplate(loaded)
+  const template = loopbackTemplate(loaded, ctx.webServer.port)
   const upstreamLoginUrl = upstreamAuthenticatedUrl(ctx, template.upstreamOrigin)
   const instanceId = await stableInstanceId(loaded, template)
   const stateDirectory = dirname(template.stateFile)

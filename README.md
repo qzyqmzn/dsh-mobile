@@ -217,7 +217,7 @@ DSH Mobile 0.3.6 不再按 DSH 精确版本号阻止启动，并已验证 DSH 0.
 
 插件不再使用运行时版本白名单；CI 会持续检查 DSH 主分支真实使用的前端、连接与信任接口，只有接口变化才需要适配。未来 DSH 更新若出现实际显示或连接异常，请升级 DSH Mobile 并提交诊断信息。
 
-0.3.4 修复 Windows [DSH Desktop](https://github.com/anywhere-labs/dsh-desktop) 的目录选择器重复注册问题：复用桌面宿主的页面内目录浏览器，普通 Web 启动仍保留手机选择电脑工作区的能力。Desktop 连接手机时需使用兼容模式并启用浏览器访问，Mobile 的上游地址应与 Desktop 的监听端口一致。
+0.3.4 修复 Windows [DSH Desktop](https://github.com/anywhere-labs/dsh-desktop) 的目录选择器重复注册问题：复用桌面宿主的页面内目录浏览器，普通 Web 启动仍保留手机选择电脑工作区的能力。Desktop 连接手机时需使用兼容模式并启用浏览器访问。未在 setup 文件中指定 upstream 时，网关会跟随当前 DSH WebServer 的实际端口；managed setup 则继续使用 `dsh-mobile setup` 写入的 `--dsh-port`。
 
 ## 卸载
 
