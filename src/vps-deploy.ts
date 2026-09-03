@@ -69,7 +69,7 @@ export interface VpsDeploymentOptions {
   readonly log?: (event: string, fields: Readonly<Record<string, string | number | boolean>>) => void
 }
 
-class VpsSshError extends Error {
+export class VpsSshError extends Error {
   constructor(message: string, readonly stdout: string, readonly stderr: string, options?: ErrorOptions) {
     super(message, options)
   }
@@ -488,6 +488,14 @@ elif [ ! -s /etc/caddy/Caddyfile ]; then
   printf '%s\n' "$caddy_import" > /etc/caddy/Caddyfile
   chmod 0644 /etc/caddy/Caddyfile
   caddyfile_ready=true
+elif grep -q '^# DSH Mobile removed its site' /etc/caddy/Caddyfile; then
+  # Leftover placeholder from our own uninstall: drop only that line and make
+  # sure the import exists. Anything else in the file is kept untouched.
+  sed -i -E '/^# DSH Mobile removed its site.*$/d' /etc/caddy/Caddyfile
+  grep -Eq '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile \
+    || printf '%s\n' "$caddy_import" >> /etc/caddy/Caddyfile
+  chmod 0644 /etc/caddy/Caddyfile
+  caddyfile_ready=true
 else
   caddy_hash="$(sha256sum /etc/caddy/Caddyfile | awk '{print $1}')"
   if [ "$caddy_hash" = '66177d46fa761acb07208065db9b0274cb1b12c02ac43b9bfc9857b698b1ccfe' ]; then
@@ -713,7 +721,12 @@ export async function deployVps(settings: FrpSettings, input: VpsDeploymentInput
     options.log?.('ssh-complete', { stdoutBytes: Buffer.byteLength(result.stdout), stderrBytes: Buffer.byteLength(result.stderr) })
   } catch (error) {
     if (error instanceof VpsSshError) {
-      const detail = safeOutput(`${error.stderr}\n${error.stdout}`, token)
+      // Prefer the failed remote check over raw output: the script reports
+      // failures through DSH_MOBILE_CHECK lines on either stream, and the raw
+      // concatenation would leak protocol framing into the UI.
+      const parsed = parseChecks(`${error.stdout}\n${error.stderr}`, '', token)
+      const failed = parsed.find(check => check.status === 'error')
+      const detail = failed?.detail ?? safeOutput(`${error.stderr}\n${error.stdout}`, token)
       options.log?.('ssh-failed', { code: error.message, detail: detail || 'no remote output' })
       throw new Error(detail === '' ? error.message : `${error.message}:${detail}`, { cause: error })
     }
@@ -901,6 +914,16 @@ export async function uninstallVps(
   try {
     result = await runRemote(parsedInput, address, script)
   } catch (error) {
+    if (error instanceof VpsSshError) {
+      // runProcess labels transport failures as deploy errors; relabel them
+      // and prefer the failed remote check over raw output (see deployVps).
+      const parsed = parseChecks(`${error.stdout}\n${error.stderr}`, '', '')
+      const failed = parsed.find(check => check.status === 'error')
+      const detail = failed?.detail ?? ''
+      const code = error.message === 'vps_deploy_failed' ? 'vps_uninstall_failed' : error.message
+      options.log?.('uninstall-failed', { code, detail: detail || 'no remote output' })
+      throw new Error(detail === '' ? code : `${code}:${detail}`, { cause: error })
+    }
     options.log?.('uninstall-failed', { code: error instanceof Error ? error.message : 'unknown' })
     throw error
   }

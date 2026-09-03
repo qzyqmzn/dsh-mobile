@@ -9,6 +9,7 @@ import {
   parseVpsDeploymentInput,
   uninstallVps,
   vpsDeploymentScriptForTesting,
+  VpsSshError,
 } from '../src/vps-deploy.js'
 import { parseFrpSettings } from '../src/frp-config.js'
 
@@ -194,6 +195,39 @@ describe('VPS deployment', () => {
       },
     })).rejects.toThrow('vps_host_key_mismatch')
     expect(connected).toBe(false)
+  })
+
+  it('replaces a leftover uninstall placeholder instead of refusing to deploy', () => {
+    const script = vpsDeploymentScriptForTesting(settings)
+    expect(script).toContain('# DSH Mobile removed its site')
+    // User content around the placeholder is kept; only the line is dropped.
+    expect(script).toContain("sed -i -E '/^# DSH Mobile removed its site.*$/d' /etc/caddy/Caddyfile")
+  })
+
+  it('reports the failed remote check instead of raw output on transport failure', async () => {
+    await expect(deployVps(settings, sshInput(), {
+      runKeyscan: async () => keyscanOutput,
+      runSsh: async () => {
+        throw new VpsSshError(
+          'vps_deploy_failed',
+          'DSH_MOBILE_CHECK os ok Ubuntu\n',
+          'DSH_MOBILE_CHECK remote-command error custom failure detail\n',
+        )
+      },
+    })).rejects.toThrow('vps_deploy_failed:custom failure detail')
+  })
+
+  it('relabels transport failures during uninstall and prefers check detail', async () => {
+    await expect(uninstallVps('frp.example.com', { serverPort: 7000 }, sshInput(), {
+      runKeyscan: async () => keyscanOutput,
+      runRemoteScript: async () => {
+        throw new VpsSshError(
+          'vps_deploy_failed',
+          'DSH_MOBILE_CHECK services ok removed\n',
+          'DSH_MOBILE_CHECK remote-command error custom uninstall failure\n',
+        )
+      },
+    })).rejects.toThrow('vps_uninstall_failed:custom uninstall failure')
   })
 
   it('generates a reviewable uninstall script that only touches owned artifacts', () => {
