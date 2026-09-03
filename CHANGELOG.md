@@ -2,12 +2,10 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
-## Unreleased (self-hosted FRP deployment flow, planned for 0.4.0)
 
-- Add VPS automatic deployment, host-key confirmation, and server cleanup to the self-hosted FRP provider, without modifying DeepSeek Harness. Thanks @qzyqmzn for the deployment flow this release hardens and proves against a real VPS.
-- Require globally routable public origins and VPS targets; documentation, private, and reserved IPv4 literals are rejected before any network access.
-- Pin SSH server identity with user-confirmed fingerprints, re-verify before destructive steps, and keep `StrictHostKeyChecking=yes` on every channel.
-- Keep existing Caddy content intact through an import-only wiring; uninstall removes just the owned snippet, import line, services, files, and deployment-created account.
+## Unreleased
+
+- Verify the mobile frontend, connection, and trust contracts against DeepSeek Harness 0.1.2-alpha.5 and 0.1.2-rc.1 through the existing upstream-source CI gate; no plugin code change was required.
 
 ## 0.3.8 - 2026-09-03
 

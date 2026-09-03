@@ -190,27 +190,16 @@ See [SECURITY.md](SECURITY.md).
 
 ## Compatibility
 
-DSH Mobile 0.3.8 keeps the open DSH version policy introduced in 0.3.6, fixes WeChat Mini-Program request headers, follows the active Desktop upstream port, and has verified the mobile frontend and connection interfaces in DSH 0.1.2-alpha.3/alpha.4. Existing 0.3.3-0.3.7 apps do not need re-pairing. Earlier apps use a different status-bar strategy, so updating both is recommended. App 0.1.3 or earlier requires reinstalling and pairing again.
+The table below lists, for each plugin version, the DeepSeek Harness version it is verified to support (earlier 0.1.x releases are compatible as well). Starting with 0.3.6 the plugin no longer rejects a DSH version by number alone; newer unlisted versions are covered by CI's contract checks. History lives in [CHANGELOG.md](CHANGELOG.md).
 
-| DSH Mobile | Verified DeepSeek Harness releases |
+| DSH Mobile plugin | Verified DeepSeek Harness version |
 | --- | --- |
-| `0.3.8` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, and `0.1.2-alpha.1` through `alpha.4`; unlisted versions are no longer rejected by version alone |
-| `0.3.7` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, and `0.1.2-alpha.1` through `alpha.4`; unlisted versions are no longer rejected by version alone |
-| `0.3.6` | `0.1.0-rc.5`, `rc.6`, `rc.7`, `0.1.1-rc.2`, and `0.1.2-alpha.1` through `alpha.4`; unlisted versions are no longer rejected by version alone |
-| `0.3.5` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1`, `0.1.2-alpha.2` |
-| `0.3.4` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1`, `0.1.2-alpha.2` |
-| `0.3.3` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
-| `0.3.2` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
-| `0.3.1` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
-| `0.3.0` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
-| `0.2.2` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
-| `0.2.1` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
-| `0.2.0` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
-| `0.1.4` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
+| `0.3.6`-`0.3.8` | `0.1.2-rc.1` |
+| `0.3.4`, `0.3.5` | `0.1.2-alpha.2` |
+| `0.3.0`-`0.3.3` | `0.1.2-alpha.1` |
+| `0.1.4`, `0.2.x` | `0.1.1-rc.2` |
 
-The plugin no longer uses a runtime version allowlist. CI continuously checks the frontend, connection, and trust interfaces used from the DSH main branch, so adaptation is required only when those interfaces actually change. If a future DSH update causes a real display or connection failure, update DSH Mobile and include diagnostics in the report.
-
-0.3.4 fixes duplicate directory-picker registration in Windows [DSH Desktop](https://github.com/anywhere-labs/dsh-desktop). It reuses the desktop host's in-page directory browser; standalone Web launches still let phones select workspaces on the computer. Mobile access through Desktop requires compatibility mode and browser access enabled. When no setup file specifies an upstream, the gateway follows the active DSH WebServer's actual port; a managed setup continues to use the `--dsh-port` value written by `dsh-mobile setup`.
+Existing 0.3.3-0.3.7 apps do not need re-pairing. Earlier apps use a different status-bar strategy, so updating both is recommended. App 0.1.3 or earlier requires reinstalling and pairing again.
 
 ## Uninstall
 
