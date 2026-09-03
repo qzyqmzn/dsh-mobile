@@ -146,9 +146,13 @@ describe('VPS deployment', () => {
     expect(script).toContain('/etc/caddy/dsh-mobile-dsh.caddy')
     expect(script).toContain('caddy_import=')
     expect(script).not.toContain('cat > /etc/caddy/Caddyfile')
-    // An existing import is hoisted to the first line: snippet globals
+    // An existing import is rebuilt into exactly one top import: snippet globals
     // (IP-mode default_sni) must precede all site blocks after inlining.
-    expect(script).toContain("sed -i '1i import /etc/caddy/dsh-mobile-dsh.caddy' /etc/caddy/Caddyfile")
+    // Removal reuses the gate grep (never sed -i) and the count is verified.
+    expect(script).toContain('Caddyfile.dsh-new')
+    expect(script).toContain('grep -Ev')
+    // Concurrent deploys/cleanups serialize on a lock so Caddyfile surgeries never interleave.
+    expect(script).toContain('flock -n 9 || fail')
     // The account is only removed when this deployment created it.
     expect(script).toContain('/etc/dsh-mobile/.owns-account')
     // The account must exist before anything references its group: a redeploy
@@ -206,8 +210,8 @@ describe('VPS deployment', () => {
   it('replaces a leftover uninstall placeholder instead of refusing to deploy', () => {
     const script = vpsDeploymentScriptForTesting(settings)
     expect(script).toContain('# DSH Mobile removed its site')
-    // User content around the placeholder is kept; only the line is dropped.
-    expect(script).toContain("sed -i -E '/^# DSH Mobile removed its site.*$/d' /etc/caddy/Caddyfile")
+    // User content around the placeholder is kept; removal is verified by count.
+    expect(script).toContain('Caddyfile.dsh-new')
   })
 
   it('reports the failed remote check instead of raw output on transport failure', async () => {
@@ -274,6 +278,7 @@ describe('VPS deployment', () => {
     expect(script).toContain('Caddyfile 非 DSH Mobile 管理，保持原样')
     // The import line is removed surgically; user content around it is kept.
     expect(script).toContain('dsh-mobile-dsh\.caddy([[:space:]]|$)')
+    expect(script).toContain('flock -n 9 || fail')
     // A pre-existing account is kept; only a deployment-created one is removed.
     expect(script).toContain('.owns-account')
     expect(script).toContain('非本次部署创建，已保留')

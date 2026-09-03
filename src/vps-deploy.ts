@@ -456,6 +456,14 @@ umask 077
 fail() { echo "DSH_MOBILE_CHECK remote-command error $1" >&2; exit 1; }
 check() { echo "DSH_MOBILE_CHECK $1 $2 $3"; }
 
+# Serialize concurrent deploys: two writers racing sed -i on the Caddyfile
+# can duplicate the import line and break validation. Uninstall takes the
+# same lock, so deploy and cleanup also exclude each other.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>/tmp/dsh-mobile-deploy.lock
+  flock -n 9 || fail "已有部署或清理正在进行，请稍后再试。"
+fi
+
 [ "$(id -u)" = "0" ] || fail "请使用 root SSH 账号。"
 command -v systemctl >/dev/null 2>&1 || fail "VPS 不支持 systemd。"
 command -v tar >/dev/null 2>&1 || fail "VPS 缺少 tar。"
@@ -501,10 +509,18 @@ if [ ! -e /etc/caddy/Caddyfile ]; then
   caddyfile_ready=true
 elif grep -Eq '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile; then
   # The snippet may carry global options (IP mode default_sni), which must
-  # precede all site blocks after import inlining: hoist our import line to
-  # the top. Nothing else in the file is reordered or removed.
-  sed -i -E '/^[[:space:]]*import[[:space:]]+\/etc\/caddy\/dsh-mobile-dsh\.caddy([[:space:]]|$)/d' /etc/caddy/Caddyfile
-  sed -i '1i import /etc/caddy/dsh-mobile-dsh.caddy' /etc/caddy/Caddyfile
+  # precede all site blocks after import inlining: rebuild the file with a
+  # single import on top. Removal uses grep -v with the exact gate pattern
+  # above (not sed -i, whose in-place delete proved unreliable here), and the
+  # result is verified to carry exactly one import before replacing the file.
+  {
+    printf '%s\n' "$caddy_import"
+    grep -Ev '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile || true
+  } > /etc/caddy/Caddyfile.dsh-new
+  [ "$(grep -Ec '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile.dsh-new)" = 1 ] \
+    || fail "Caddyfile import 整理失败，未做任何修改。"
+  cat /etc/caddy/Caddyfile.dsh-new > /etc/caddy/Caddyfile
+  rm -f /etc/caddy/Caddyfile.dsh-new
   chmod 0644 /etc/caddy/Caddyfile
   caddyfile_ready=true
 elif [ ! -s /etc/caddy/Caddyfile ]; then
@@ -512,11 +528,15 @@ elif [ ! -s /etc/caddy/Caddyfile ]; then
   chmod 0644 /etc/caddy/Caddyfile
   caddyfile_ready=true
 elif grep -q '^# DSH Mobile removed its site' /etc/caddy/Caddyfile; then
-  # Leftover placeholder from our own uninstall: drop only that line and make
-  # sure the import exists. Anything else in the file is kept untouched.
-  sed -i -E '/^# DSH Mobile removed its site.*$/d' /etc/caddy/Caddyfile
-  grep -Eq '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile \
-    || printf '%s\n' "$caddy_import" >> /etc/caddy/Caddyfile
+  # Leftover placeholder from our own uninstall: drop only that line, then
+  # ensure the import exists exactly once (same grep -v + count discipline).
+  grep -Ev '^# DSH Mobile removed its site.*$' /etc/caddy/Caddyfile > /etc/caddy/Caddyfile.dsh-new || true
+  grep -Eq '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile.dsh-new \
+    || printf '%s\n' "$caddy_import" >> /etc/caddy/Caddyfile.dsh-new
+  [ "$(grep -Ec '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile.dsh-new)" = 1 ] \
+    || fail "Caddyfile import 整理失败，未做任何修改。"
+  cat /etc/caddy/Caddyfile.dsh-new > /etc/caddy/Caddyfile
+  rm -f /etc/caddy/Caddyfile.dsh-new
   chmod 0644 /etc/caddy/Caddyfile
   caddyfile_ready=true
 else
@@ -814,6 +834,13 @@ umask 077
 fail() { echo "DSH_MOBILE_CHECK remote-command error $1" >&2; exit 1; }
 check() { echo "DSH_MOBILE_CHECK $1 $2 $3"; }
 
+# Same lock as the deploy script: cleanup and deployment exclude each other
+# so their Caddyfile surgeries never interleave.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>/tmp/dsh-mobile-deploy.lock
+  flock -n 9 || fail "已有部署或清理正在进行，请稍后再试。"
+fi
+
 [ "$(id -u)" = "0" ] || fail "请使用 root SSH 账号。"
 command -v systemctl >/dev/null 2>&1 || fail "VPS 不支持 systemd。"
 
@@ -838,10 +865,18 @@ rm -rf /var/lib/caddy/dsh-mobile-certs
 rm -f ${FRP_CADDY_SNIPPET_PATH}
 check files ok "已删除 DSH Mobile 配置、二进制与证书文件。"
 
-if [ -f /etc/caddy/Caddyfile ] && grep -Eq '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile; then
-  sed -i -E '/^[[:space:]]*import[[:space:]]+\/etc\/caddy\/dsh-mobile-dsh\.caddy([[:space:]]|$)/d' /etc/caddy/Caddyfile
+if grep -Eq '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile 2>/dev/null; then
+  # Rebuild without our import line (grep -v with the gate pattern, verified
+  # to remove every copy), keeping all user content byte-identical otherwise.
+  grep -Ev '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile > /etc/caddy/Caddyfile.dsh-new || true
+  if grep -Eq '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile.dsh-new; then
+    rm -f /etc/caddy/Caddyfile.dsh-new
+    fail "Caddyfile import 移除失败，未做任何修改。"
+  fi
+  cat /etc/caddy/Caddyfile.dsh-new > /etc/caddy/Caddyfile
+  rm -f /etc/caddy/Caddyfile.dsh-new
   if [ ! -s /etc/caddy/Caddyfile ]; then
-    printf '# DSH Mobile removed its site; the remaining Caddyfile was empty.\\n' > /etc/caddy/Caddyfile
+    printf '# DSH Mobile removed its site; the remaining Caddyfile was empty.\n' > /etc/caddy/Caddyfile
     chmod 0644 /etc/caddy/Caddyfile
   fi
   if command -v caddy >/dev/null 2>&1; then
