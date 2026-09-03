@@ -500,6 +500,12 @@ if [ ! -e /etc/caddy/Caddyfile ]; then
   chmod 0644 /etc/caddy/Caddyfile
   caddyfile_ready=true
 elif grep -Eq '^[[:space:]]*import[[:space:]]+/etc/caddy/dsh-mobile-dsh\.caddy([[:space:]]|$)' /etc/caddy/Caddyfile; then
+  # The snippet may carry global options (IP mode default_sni), which must
+  # precede all site blocks after import inlining: hoist our import line to
+  # the top. Nothing else in the file is reordered or removed.
+  sed -i -E '/^[[:space:]]*import[[:space:]]+\/etc\/caddy\/dsh-mobile-dsh\.caddy([[:space:]]|$)/d' /etc/caddy/Caddyfile
+  sed -i '1i import /etc/caddy/dsh-mobile-dsh.caddy' /etc/caddy/Caddyfile
+  chmod 0644 /etc/caddy/Caddyfile
   caddyfile_ready=true
 elif [ ! -s /etc/caddy/Caddyfile ]; then
   printf '%s\n' "$caddy_import" > /etc/caddy/Caddyfile

@@ -146,6 +146,9 @@ describe('VPS deployment', () => {
     expect(script).toContain('/etc/caddy/dsh-mobile-dsh.caddy')
     expect(script).toContain('caddy_import=')
     expect(script).not.toContain('cat > /etc/caddy/Caddyfile')
+    // An existing import is hoisted to the first line: snippet globals
+    // (IP-mode default_sni) must precede all site blocks after inlining.
+    expect(script).toContain("sed -i '1i import /etc/caddy/dsh-mobile-dsh.caddy' /etc/caddy/Caddyfile")
     // The account is only removed when this deployment created it.
     expect(script).toContain('/etc/dsh-mobile/.owns-account')
     // The account must exist before anything references its group: a redeploy
