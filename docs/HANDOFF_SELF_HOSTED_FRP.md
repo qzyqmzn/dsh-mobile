@@ -48,6 +48,7 @@ cd apps/mobile/android
   1. 重部署不断开旧 frps（`enable --now` 对已运行服务是 no-op）导致 Token 失配——部署脚本现改为 `enable` + `restart`，并有回归测试锁定。
   2. 本机旧版 `ssh-keyscan` 与 OpenSSH 9.6 协商 KEX 失败——`defaultRunKeyscan` 增加 Git 版 keyscan 重试，仍无输出时回退到认证连接直读公钥（同一确认-固定管线），并有回归测试锁定。
   3. 长会话（apt/pip 分钟级无输出）曾被中间设备 reset——SSH/SCP 会话现带 `ServerAliveInterval=15` 保活。
+  4. `sed -i` 原地删除在部署通道里不可靠（重复 import 增生导致全局块重复，`caddy validate` 报 adapting 错误）：Caddyfile 改写统一用 `grep -v` 重建 + 导入行计数校验，失败即中止不落盘。
 
 ## 安全边界（改动时复核）
 
