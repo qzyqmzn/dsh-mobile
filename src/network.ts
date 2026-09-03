@@ -200,16 +200,20 @@ export class RequestTrustPolicy {
   /** Return the canonical accepted Origin, otherwise undefined. */
   canonicalOrigin(header: string | undefined): string | undefined {
     if (header === undefined) return undefined
-    let normalized: string
-    try {
-      const parsed = new URL(header)
-      if (parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== '' || parsed.username !== '' || parsed.password !== '') {
-        return undefined
+    // 微信小程序 wx.connectSocket 会把多个 Origin 值用逗号合并（如 "http://host,undefined"），逐个尝试。
+    for (const part of header.split(',')) {
+      let normalized: string
+      try {
+        const parsed = new URL(part.trim())
+        if (parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== '' || parsed.username !== '' || parsed.password !== '') {
+          continue
+        }
+        normalized = parsed.origin.toLowerCase()
+      } catch {
+        continue
       }
-      normalized = parsed.origin.toLowerCase()
-    } catch {
-      return undefined
+      if (this.origins.has(normalized)) return normalized
     }
-    return this.origins.has(normalized) ? normalized : undefined
+    return undefined
   }
 }

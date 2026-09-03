@@ -26,7 +26,7 @@
         initiallyEnabled: false
         listenHost: 127.0.0.1
         listenPort: 3443
-        upstreamOrigin: http://127.0.0.1:3080
+        upstreamOrigin: http://127.0.0.1:43120
         allowedCidrs: [127.0.0.0/8]
         tls:
           mode: disabled
