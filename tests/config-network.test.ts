@@ -266,6 +266,9 @@ describe('network trust policy', () => {
     expect(policy.acceptsOrigin('https://harness.example:3443')).toBe(true)
     expect(policy.acceptsOrigin('http://harness.example:3443')).toBe(false)
     expect(policy.acceptsOrigin('https://harness.example:3443/path')).toBe(false)
+    expect(policy.acceptsOrigin('https://harness.example:3443,undefined')).toBe(true)
+    expect(policy.acceptsOrigin('https://harness.example:3443,https://evil.example')).toBe(false)
+    expect(policy.acceptsOrigin('https://evil.example,https://harness.example:3443')).toBe(false)
   })
 
   it.each([

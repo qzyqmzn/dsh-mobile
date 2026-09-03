@@ -208,7 +208,7 @@ DSH Mobile 0.3.6 no longer blocks startup by exact DSH version and has verified 
 
 The plugin no longer uses a runtime version allowlist. CI continuously checks the frontend, connection, and trust interfaces used from the DSH main branch, so adaptation is required only when those interfaces actually change. If a future DSH update causes a real display or connection failure, update DSH Mobile and include diagnostics in the report.
 
-0.3.4 fixes duplicate directory-picker registration in Windows [DSH Desktop](https://github.com/anywhere-labs/dsh-desktop). It reuses the desktop host's in-page directory browser; standalone Web launches still let phones select workspaces on the computer. Mobile access through Desktop requires compatibility mode and browser access enabled, with Mobile's upstream address matching Desktop's listening port.
+0.3.4 fixes duplicate directory-picker registration in Windows [DSH Desktop](https://github.com/anywhere-labs/dsh-desktop). It reuses the desktop host's in-page directory browser; standalone Web launches still let phones select workspaces on the computer. Mobile access through Desktop requires compatibility mode and browser access enabled. When no setup file specifies an upstream, the gateway follows the active DSH WebServer's actual port; a managed setup continues to use the `--dsh-port` value written by `dsh-mobile setup`.
 
 ## Uninstall
 
