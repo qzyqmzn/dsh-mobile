@@ -1406,8 +1406,6 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   const irohQrZoom = element('div', 'dsh-mobile-control__qr-zoom'); irohQrZoom.hidden = true
   const irohQrZoomImage = element('img', 'dsh-mobile-control__qr-zoom-image'); irohQrZoomImage.alt = t('pairingQr')
   const irohQrZoomClose = element('button', 'dsh-mobile-control__qr-zoom-close'); irohQrZoomClose.type = 'button'; irohQrZoomClose.textContent = '×'; irohQrZoomClose.setAttribute('aria-label', t('closeEnlargedQr'))
-  irohQrZoom.setAttribute('role', 'dialog')
-  irohQrZoom.setAttribute('aria-modal', 'true')
   irohQrZoom.setAttribute('aria-label', t('enlargeQr'))
   irohQrZoom.append(irohQrZoomImage, irohQrZoomClose)
   root.append(irohQrZoom)
@@ -2457,10 +2455,17 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
     if (activeIrohQrSvg === '' || irohQr.hidden) return
     irohQrZoomImage.src = `data:image/svg+xml;base64,${btoa(activeIrohQrSvg)}`
     irohQrZoom.hidden = false
+    // Keep the dialog semantics only while the viewer is open: a permanently
+    // present aria-modal node is reported as a modal even when closed, and
+    // hides real first-run dialogs from page-level helpers.
+    irohQrZoom.setAttribute('role', 'dialog')
+    irohQrZoom.setAttribute('aria-modal', 'true')
     irohQrZoomClose.focus()
   }
   const closeIrohQrZoom = (): void => {
     irohQrZoom.hidden = true
+    irohQrZoom.removeAttribute('role')
+    irohQrZoom.removeAttribute('aria-modal')
     if (!irohQr.hidden) irohQr.focus()
   }
   irohQr.setAttribute('role', 'button')
