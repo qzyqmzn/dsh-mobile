@@ -23,6 +23,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseControlFile, parseGatewayConfig, type PluginConfig, type ResolvedGatewayConfig } from './config.js'
 import { collectConnectionDiagnostics, hasCompetingRemoteChannelBoot } from './diagnostics.js'
+import { MacFileAccessProbe, openMacFullDiskAccessSettings } from './macos-file-access.js'
 import { buildMobileGuide, type MobileGuideState } from './mobile-guide.js'
 import { createVpsUninstallScript, deployVps, fetchVpsHostKeys, parseVpsDeploymentInput, uninstallVps } from './vps-deploy.js'
 import { TaskEventHub, watchTaskCompletions } from './task-events.js'
@@ -93,6 +94,7 @@ import { PushRegistry } from './mobile-push/registry.js'
 import { PushDelivery } from './mobile-push/delivery.js'
 import { createVapidKeys, PushSender } from './mobile-push/sender.js'
 import { PushGatewayCoordinator, type PushGatewayOriginBinding, type PushGatewayService } from './mobile-push/gateway.js'
+import { MobilePushService } from './mobile-push/service.js'
 import type { ContextLike, PushConfig } from './mobile-push/contracts.js'
 import { loadOrCreateInstallationId } from './installation-id.js'
 import { withInstallationIdentity } from './gateway-identity.js'
@@ -588,6 +590,15 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   const taskEventHub = new TaskEventHub()
   const disposeTaskEvents = watchTaskCompletions(ctx, {
     onTaskCompleted: event => taskEventHub.broadcast(event),
+    // The title projection is the same Session title the dedicated layout shows.
+    // Read the service lazily: it is optional on older DSH hosts, and its absence
+    // must simply omit the optional wire text.
+    readSessionTitle: session => {
+      const projections = (ctx as unknown as {
+        get?: (name: string) => { stateOf?: (session: unknown, key: string) => unknown } | undefined
+      }).get?.('sessionProjections')
+      return projections?.stateOf?.(session, 'title')
+    },
     log(event, fields) { logger.info('task event=%s fields=%o', event, fields) },
   })
   let pushHost: ReturnType<typeof createPushHost> | undefined
@@ -640,6 +651,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     if (service === undefined) throw new Error('push_unavailable')
     return service
   }
+  new MobilePushService(ctx, async input => (await requiredPushGatewayService()).notifyCustom(input))
   const queueDeviceInvalidations = (scopeId: string, deviceIds: readonly string[]): void => {
     let queued = pendingDeviceInvalidations.get(scopeId)
     if (queued === undefined) pendingDeviceInvalidations.set(scopeId, queued = new Set())
@@ -706,6 +718,11 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
       }
     },
     async test(owner, installationId) { await (await requiredPushGatewayService()).test(owner, installationId) },
+    async notifyCustom(input) {
+      const service = await requiredPushGatewayService()
+      if (service.notifyCustom === undefined) throw new Error('push_unavailable')
+      return await service.notifyCustom(input)
+    },
     async resolve(owner, reference) { return (await requiredPushGatewayService()).resolve(owner, reference) },
   }
   const closePushRuntime = async (coordinatorOverride?: PushGatewayCoordinator): Promise<void> => {
@@ -795,6 +812,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   const cloudflaredComponent = new CloudflaredComponentManager({ stateDirectory })
   await cloudflaredComponent.initialize()
   const frpComponent = new FrpComponentManager({ stateDirectory })
+  const macFileAccess = new MacFileAccessProbe()
   await frpComponent.initialize()
   // The iroh sidecar is distributed by this plugin from a pinned release; a
   // verified companion copy is still reused without downloading while the
@@ -1083,6 +1101,9 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     component: irohComponent,
     dataDirectory: join(remoteDirectory, 'iroh', 'sidecar'),
     createGateway: endpointId => createIrohGateway(endpointId),
+    onFailure: ({ errorCode, diagnostic }) => {
+      logger.warn('iroh startup failed: %s%s', errorCode, diagnostic === undefined ? '' : `; ${diagnostic}`)
+    },
     /**
      * Read the pairing CA the live gateway advertises. The fingerprint must
      * match the gateway instance id, otherwise a rotated CA would mint QR
@@ -1178,7 +1199,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     caddyComponent.status(),
     irohComponent.status(),
   ), originMode: originController.mode(), caddyConfiguration: caddyConfig.status(), caddyState: caddyController.status(),
-  ...(process.platform === 'darwin' ? { macosHost: true } : {}) })
+  ...(macFileAccess.applicable ? { macosHost: true, macFileAccess: macFileAccess.status() } : {}) })
   const lanPayload = (): Record<string, unknown> => ({
     ...(loaded.kind === 'unconfigured' ? {
       configured: preparedLanSetup !== undefined,
@@ -1500,7 +1521,18 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
           return
         }
         if (request.method === 'GET' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/control`) {
+          // Re-check while the grant is missing so opening System Settings and
+          // coming back is enough; a granted result is final and skips the I/O.
+          await macFileAccess.refresh()
           sendJson(response, 200, remotePayload(), false)
+          return
+        }
+        if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/macos-file-access/open-settings`) {
+          // The renderer cannot navigate to x-apple.systempreferences, so the
+          // host opens the pane on the Mac that owns the app.
+          if (!macFileAccess.applicable) throw new HttpError(404, 'not_found')
+          await openMacFullDiskAccessSettings()
+          sendJson(response, 200, { opened: true }, false)
           return
         }
         if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/remote/provider`) {

@@ -29,6 +29,7 @@ import {
   installDshLanguageBoundSurface,
   installMobileNativeBack,
   installMobilePushBrowserClient,
+  installSessionPrefetchSettings,
   MOBILE_CONTROL_MESSAGES,
   mobileBackBlockedMessage,
   normalizeDiagnosticOverall,
@@ -257,6 +258,33 @@ describe('dedicated browser push client entry', () => {
     await Promise.resolve()
     expect(test.api.getConfig).toHaveBeenCalledTimes(2)
     expect(test.api.disable).not.toHaveBeenCalled()
+  })
+
+  describe('dedicated session-prefetch settings entry', () => {
+    it('registers the opt-in row on the dedicated Mobile layout', () => {
+      const test = fixture()
+      const dispose = installSessionPrefetchSettings(test.context as never, test.view)
+      expect(test.slotRegistrations).toHaveLength(1)
+      expect(test.slotRegistrations[0]?.options).toMatchObject({ id: 'dsh-mobile-session-prefetch', order: 130 })
+      dispose()
+    })
+
+    it('registers even when the Android native bridge is present', () => {
+      const test = fixture()
+      test.view.__DSH_MOBILE_NATIVE__ = { capabilities: () => [], invoke: async () => undefined }
+      const dispose = installSessionPrefetchSettings(test.context as never, test.view)
+      expect(test.slotRegistrations).toHaveLength(1)
+      expect(test.slotRegistrations[0]?.options).toMatchObject({ id: 'dsh-mobile-session-prefetch', order: 130 })
+      dispose()
+    })
+
+    it('stays inert on the stock desktop page', () => {
+      const test = fixture()
+      delete (test.view as { __DSH_MOBILE_FRONTEND__?: unknown }).__DSH_MOBILE_FRONTEND__
+      const dispose = installSessionPrefetchSettings(test.context as never, test.view)
+      expect(test.slotRegistrations).toHaveLength(0)
+      dispose()
+    })
   })
 
   it('routes default browser mutations through the existing one-shot CSRF mobileRequest transport', async () => {
@@ -1306,7 +1334,7 @@ describe('mobile-control localization', () => {
       const copy = messages as Record<string, string>
       for (const key of ['irohName', 'irohExperimental', 'irohDescription', 'prepareIroh', 'irohInstallNote',
         'irohComponentNote', 'irohPhaseNote', 'irohUnavailable', 'irohStarting', 'irohConnecting',
-        'irohCompanionMissing', 'irohDataDirectoryInvalid', 'irohSidecarInvalid', 'irohDownloadFailed', 'irohPlatformUnsupported', 'irohIdentityFailed',
+        'irohCompanionMissing', 'irohDataDirectoryInvalid', 'irohDataDirectoryInsecure', 'irohSidecarInvalid', 'irohDownloadFailed', 'irohPlatformUnsupported', 'irohIdentityFailed',
         'irohLaunchFailed', 'irohTimeout', 'irohInstallConfirm', 'installingIroh', 'switchingIroh',
         'reconnectingIroh', 'resetIrohConfirm', 'irohNotReady', 'irohPairingFailed', 'irohExited',
         'irohPairingTitle', 'generateIrohQr', 'enlargeQr', 'closeEnlargedQr', 'irohPairingReady']) {
@@ -1530,6 +1558,26 @@ describe('mobile-control localization', () => {
     expect(bridge).toContain('"notification.settings" -> activity.runOnUiThread')
     expect(bridge).toContain('onOpenTaskNotificationSettings')
     expect(activity).toContain('bridge.onOpenTaskNotificationSettings = ::openTaskNotificationSettings')
+  })
+
+  it('registers the opt-in background notification bridge without enabling it implicitly', () => {
+    const source = readFileSync(new URL('../src/client.ts', import.meta.url), 'utf8')
+    const bridge = readFileSync(new URL('../apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/NativeBridge.kt', import.meta.url), 'utf8')
+    const activity = readFileSync(new URL('../apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/MainActivity.kt', import.meta.url), 'utf8')
+    expect(source).toContain("id: 'dsh-mobile-background-notifications'")
+    expect(source).toContain("notification.background.get")
+    expect(source).toContain("notification.background.set")
+    expect(source).toContain("installTaskNotificationNavigation")
+    expect(source).toContain("installNativeNotificationNavigation")
+    expect(source).toContain("__dshMobileOpenSession")
+    expect(source).toContain("parameter: 'dsh-session'")
+    expect(bridge).toContain('"notification.background.get" -> activity.runOnUiThread')
+    expect(bridge).toContain('"notification.background.set" -> activity.runOnUiThread')
+    expect(bridge).toContain('onGetBackgroundNotificationStatus')
+    expect(activity).toContain('bridge.onSetBackgroundNotifications = ::setBackgroundNotifications')
+    expect(activity).toContain('bridge.onGetBackgroundNotificationStatus')
+    expect(activity).toContain('__dshMobileOpenSession')
+    expect(activity).toContain('BackgroundNotificationService.resumeIfEnabled(this, record.key)')
   })
 
   it('owns locale persistence as an independent disposable client effect', () => {

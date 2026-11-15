@@ -10,6 +10,7 @@ import { MOBILE_COMPOSER_TOOLBAR_STYLES } from './mobile-composer-toolbar.js'
 import { pickBrowserFiles } from './browser-file-picker.js'
 import { installMobileSidebarScrollMemory } from './mobile-sidebar-scroll.js'
 import { WIDE_LAYOUT_ATTRIBUTE } from './mobile-layout-attributes.js'
+import { installMobilePathCopy, PATH_COPY_TOUCH_QUERY } from './mobile-path-copy.js'
 
 export const NATIVE_MOBILE_OVERLAY_QUERY = '(max-width:720px)'
 
@@ -23,6 +24,12 @@ export const NATIVE_MOBILE_STYLES = `
    the query restores the fixed scrim, and its more specific [hidden] rule
    keeps winning there. */
  .dsh-native-mobile-backdrop,.dsh-mobile-branch-toast,.dsh-mobile-media-toast { display:none; }
+ /* The path-copy toast confirms a clipboard write whose gate is the touch
+    predicate, not viewport width, so its box lives outside the overlay query:
+    a landscape phone or tablet copy must stay visible. The bottom slot keeps
+    it clear of the branch and media toasts' shared top-center position. */
+ .dsh-mobile-path-toast { display:none; }
+ .dsh-mobile-path-toast[data-visible="true"] { display:block; position:fixed; z-index:330; left:50%; transform:translateX(-50%); bottom:max(12px,env(safe-area-inset-bottom)); max-width:calc(100vw - 32px); box-sizing:border-box; padding:7px 14px; border:1px solid rgb(15 23 42 / 10%); border-radius:999px; background:rgb(15 23 42 / 92%); color:#fff; font-size:13px; line-height:20px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
  /* The content-font preference may exceed Safari's focused-editable minimum.
     The html-level class exists on every non-desktop mobile page, so it also
     covers body-level portals (model picker search) the center column never
@@ -39,6 +46,13 @@ export const NATIVE_MOBILE_STYLES = `
  .dsh-mobile-settings_selector:hover:not(:disabled) { background:var(--dsw-alias-interactive-bg-hover); }
  .dsh-mobile-settings_selector:active:not(:disabled) { background:var(--dsw-alias-interactive-bg-active,var(--dsw-alias-interactive-bg-hover)); }
  .dsh-mobile-settings_selector:focus-visible { outline:2px solid var(--dsw-alias-label-primary-bluish,#2563eb); outline-offset:2px; }
+/* Row switches (session prefetch, composer collapse) pair a visually-hidden
+   native checkbox with an On/Off pill. Hide the checkbox so the pill is the only
+   visible control, while the label keeps the 48px row a tap target and the input
+   stays keyboard-focusable; the pill's :focus-visible ring is driven by the
+   checkbox's focus via :has. */
+ .dsh-mobile-settings_switchInput { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; opacity:0; }
+ .dsh-mobile-settings_row:has(.dsh-mobile-settings_switchInput:focus-visible) .dsh-mobile-settings_selector { outline:2px solid var(--dsw-alias-label-primary-bluish,#2563eb); outline-offset:2px; }
  .dsh-mobile-settings_selector:disabled { cursor:wait; opacity:.55; }
  .dsh-mobile-settings_fontControls { display:flex; align-items:center; gap:8px; flex-shrink:0; }
  .dsh-mobile-settings_fontControls button { min-width:48px; padding:0 12px; }
@@ -1415,6 +1429,14 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
       mediaToastTimer = 0
     }, 2200)
   }
+  const disposePathCopy = installMobilePathCopy({
+    document,
+    isTouchPrimary: () => window.matchMedia(PATH_COPY_TOUCH_QUERY).matches,
+    labels: {
+      copied: label('Copiato: {path}', 'Copied: {path}', '已复制：{path}'),
+      failed: label('Impossibile copiare il percorso.', 'Could not copy the path.', '无法复制路径。'),
+    },
+  })
   let mediaRequestGeneration = 0
   let disposed = false
   let boundComposer: Element | null = null
@@ -2045,6 +2067,7 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
     disposed = true
     stopStockBack()
     sidebarScrollMemory.dispose()
+    disposePathCopy()
     disposeTaskWatcher()
     mediaRequestGeneration += 1
     mediaPickerAbortController.abort()

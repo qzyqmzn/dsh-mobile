@@ -1,4 +1,4 @@
-import { createHash, randomBytes, X509Certificate } from 'node:crypto'
+import { createHash, randomUUID, randomBytes, X509Certificate } from 'node:crypto'
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram'
 import { lstat, readFile, stat } from 'node:fs/promises'
 import { hostname } from 'node:os'
@@ -18,6 +18,7 @@ import {
 import { createServer as createHttpsServer, type Server as HttpsServer, type ServerOptions } from 'node:https'
 import { connect, type AddressInfo, type Socket } from 'node:net'
 import { isIP } from './ip.js'
+import { TASK_ANNOUNCEMENT_LIMITS } from './task-events.js'
 import { Transform, type TransformCallback } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
@@ -38,6 +39,15 @@ export type { AuthFailureEntry } from './auth-failure-log.js'
 import { HttpFailureRecorder, type HttpFailureEntry } from './http-failure-log.js'
 export type { HttpFailureEntry } from './http-failure-log.js'
 import { ApiLatencyRecorder, boundedApiPath, type ApiLatencyEntry } from './api-latency-log.js'
+import {
+  CATALOG_MUTATION_METHODS,
+  CatalogCache,
+  checkCatalogRequest,
+  DEFAULT_CATALOG_CACHE_LIMITS,
+  type CatalogFillOutcome,
+  type CatalogMethod,
+  type CatalogServeResult,
+} from './catalog-cache.js'
 export type { ApiLatencyEntry } from './api-latency-log.js'
 import { UpstreamAuthRecorder, type UpstreamAuthEntry, type UpstreamAuthOutcome } from './upstream-auth-log.js'
 export type { UpstreamAuthEntry } from './upstream-auth-log.js'
@@ -140,12 +150,16 @@ type OwnedStaticAsset = {
 }
 const MOBILE_BOOT_BATCH_PREFIX = `${AUTH_PREFIX}/mobile-boot/`
 const MOBILE_DOCUMENT_VIEW_HEADER = 'x-dsh-mobile-view'
+const CATALOG_CACHE_MARKER = 'x-dsh-mobile-catalog'
+/** Eligible catalog envelopes are small fixed-shape JSON; larger declared bodies keep the streaming path. */
+const CATALOG_CANDIDATE_BODY_LIMIT = 64 * 1024
 const MOBILE_PUSH_CONFIG_PATH = `${AUTH_PREFIX}/push/config`
 const MOBILE_PUSH_SUBSCRIPTION_PATH = `${AUTH_PREFIX}/push/subscription`
 const MOBILE_PUSH_PREFERENCES_PATH = `${AUTH_PREFIX}/push/preferences`
 const MOBILE_PUSH_DISABLE_PATH = `${AUTH_PREFIX}/push/disable`
 const MOBILE_PUSH_TEST_PATH = `${AUTH_PREFIX}/push/test`
 const MOBILE_PUSH_RESOLVE_PATH = `${AUTH_PREFIX}/push/resolve`
+const BACKGROUND_EVENT_PATH = `${AUTH_PREFIX}/background-events`
 const MOBILE_PUSH_PREFERENCE_KEYS = ['question', 'plan', 'approval', 'response', 'goal', 'failure'] as const
 const DEFAULT_PUSH_PREFERENCES: PushPreferences = Object.freeze({ question: true, plan: true, approval: true, response: true, goal: true, failure: true })
 
@@ -781,14 +795,14 @@ export function splitMobileBootBatch(
   for (const entry of entries) {
     const size = sizes.get(entry.url)
     const oversized = passThrough.has(entry.url)
-      || (size !== undefined && size >= MAX_MOBILE_BOOT_ENTRY_BYTES)
+      || (size !== undefined && (size <= 0 || size >= MAX_MOBILE_BOOT_ENTRY_BYTES))
     if (oversized && entry.id !== MOBILE_LAYOUT_MODULE) {
       // A pass-through row never joins a merged batch; it also must not split
       // the open chunk, because chunk contents are independent of row order.
       rows.push({ phase: 'application', url: entry.url, rev: entry.rev, entries: [entry.id] })
       continue
     }
-    const bytes = (size ?? 0) + MOBILE_BOOT_SEPARATOR_BYTES
+    const bytes = (size !== undefined && size > 0 ? size : 0) + MOBILE_BOOT_SEPARATOR_BYTES
     if (chunk !== undefined && chunk.entries.length > 0 && chunk.bytes + bytes > MOBILE_BOOT_CHUNK_BYTES) flush()
     chunk ??= { ids: [], entries: [], bytes: 0 }
     chunk.ids.push(entry.id)
@@ -1073,6 +1087,21 @@ function sanitizeRequestHeaders(
   for (const name of allowed) {
     const value = request.headers[name]
     if (value !== undefined) headers[name] = value
+  }
+  // Forward DSH plugin namespace headers (x-dsh-*) so plugin-side custom
+  // authentication/validation markers survive the gateway proxy. These
+  // requests still pass the gateway's pairing authentication and CSRF
+  // checks before reaching upstream, so opening this namespace does not
+  // add cross-site risk (mirrors the dsh-web remote forwarding fix).
+  // The x-dsh-mobile-* namespace is reserved for internal gateway markers
+  // (CSRF, view, catalog, size-probe, admin, capabilities) and must not
+  // leak upstream. DSH also owns x-dsh-auth-token for account credentials;
+  // that header is never a plugin marker and remains excluded.
+  for (const name of Object.keys(request.headers)) {
+    const lower = name.toLowerCase()
+    if (!lower.startsWith('x-dsh-') || lower.startsWith('x-dsh-mobile-') || lower === 'x-dsh-auth-token') continue
+    const value = request.headers[name]
+    if (value !== undefined) headers[name] = Array.isArray(value) ? value[0] : value
   }
   return headers
 }
@@ -1418,6 +1447,19 @@ export class MobileAccessGateway {
   private upstreamCookie: string | undefined
   private upstreamCookieExpiresAt = 0
   private upstreamCookieTask: Promise<string> | undefined
+  #catalogCache: CatalogCache<{ cookieHeader: string | undefined }> | undefined
+  #upstreamIdentityRevision = 0
+  readonly #catalogFills = new Set<ClientRequest>()
+
+  /** The catalog SWR cache, or undefined when `catalogCache` is disabled. */
+  private get catalogCache(): CatalogCache<{ cookieHeader: string | undefined }> | undefined {
+    if (!this.config.catalogCache) return undefined
+    this.#catalogCache ??= new CatalogCache<{ cookieHeader: string | undefined }>({
+      fetchFill: input => this.catalogFill(input),
+      clock: () => performance.now(),
+    })
+    return this.#catalogCache
+  }
   private upstreamAuthRequest: ClientRequest | undefined
   private nextOperationId = 1
   private closing = false
@@ -2287,6 +2329,7 @@ export class MobileAccessGateway {
     const workspaceDirectories = (request.method === 'GET' || request.method === 'POST')
       && target.decodedPathname === `${AUTH_PREFIX}/workspace-directories`
     const clientModules = target.decodedPathname === `${AUTH_PREFIX}/client-modules`
+    const backgroundEvents = target.decodedPathname === BACKGROUND_EVENT_PATH
     const mobilePushRoute = [MOBILE_PUSH_CONFIG_PATH, MOBILE_PUSH_SUBSCRIPTION_PATH, MOBILE_PUSH_PREFERENCES_PATH,
       MOBILE_PUSH_DISABLE_PATH, MOBILE_PUSH_TEST_PATH, MOBILE_PUSH_RESOLVE_PATH].includes(target.decodedPathname)
     const requestedExtension = extensionTarget(target.decodedPathname)
@@ -2326,7 +2369,7 @@ export class MobileAccessGateway {
                     digest: requestedCompatRevision,
                   }
       : undefined
-    if (customAsset === undefined && requestedMobileBootBatch === undefined && !computerImages && !computerImage && !workspaceDirectories && !clientModules && !mobilePushRoute
+    if (customAsset === undefined && requestedMobileBootBatch === undefined && !computerImages && !computerImage && !workspaceDirectories && !clientModules && !backgroundEvents && !mobilePushRoute
       && extensionTarget(target.decodedPathname) === undefined
       && (target.decodedPathname === AUTH_PREFIX || target.decodedPathname.startsWith(`${AUTH_PREFIX}/`))) {
       throw new HttpError(404, 'not_found')
@@ -2372,6 +2415,13 @@ export class MobileAccessGateway {
     }
     if (mobilePushRoute) {
       await this.handleMobilePushRequest(target, request, response, authorization)
+      return
+    }
+    if (backgroundEvents) {
+      if (request.method !== 'GET' || target.search !== '') {
+        throw new HttpError(request.method === 'GET' ? 400 : 405, request.method === 'GET' ? 'bad_request' : 'method_not_allowed')
+      }
+      this.openBackgroundEventStream(request, response, authorization)
       return
     }
     if (clientModules) {
@@ -2563,6 +2613,29 @@ export class MobileAccessGateway {
       return
     }
     if (stockFrontend && target.decodedPathname === '/') request.url = '/'
+    const candidateContentType = String(request.headers['content-type'] ?? '').split(';', 1)[0]?.trim().toLowerCase()
+    const candidateDeclaredLength = request.headers['content-length'] === undefined ? undefined : Number(request.headers['content-length'])
+    const catalogRouteMethod = this.config.catalogCache && documentView === undefined && request.method === 'POST'
+      && target.search === ''
+      && candidateContentType === 'application/json'
+      && candidateDeclaredLength !== undefined && Number.isFinite(candidateDeclaredLength)
+      && candidateDeclaredLength > 0 && candidateDeclaredLength <= CATALOG_CANDIDATE_BODY_LIMIT
+      && (target.decodedPathname === '/api/llm/listProviders' || target.decodedPathname === '/api/session/modelCatalog')
+      ? target.decodedPathname.slice('/api/'.length)
+      : undefined
+    if (catalogRouteMethod !== undefined) {
+      const candidateBody = await this.readRequestBody(request, Math.min(CATALOG_CANDIDATE_BODY_LIMIT, this.config.maxBodyBytes))
+      const eligible = checkCatalogRequest(catalogRouteMethod, candidateBody.toString('utf8'))
+      if (eligible !== undefined && this.catalogCache !== undefined) {
+        const served = await this.serveCatalogCache(eligible, request, response, authorization)
+        if (served) return
+        response.setHeader(CATALOG_CACHE_MARKER, 'miss-passthrough')
+        await this.proxyHttp(request, response, authorization, documentView, candidateBody)
+        return
+      }
+      await this.proxyHttp(request, response, authorization, documentView, candidateBody)
+      return
+    }
     await this.proxyHttp(request, response, authorization, documentView)
   }
 
@@ -2834,6 +2907,10 @@ export class MobileAccessGateway {
       }
       this.upstreamCookie = pair
       this.upstreamCookieExpiresAt = expiresAt
+      // The upstream identity changed; drop cached catalogs keyed to the old
+      // one and advance the revision so in-flight snapshots are not reused.
+      this.#upstreamIdentityRevision += 1
+      this.catalogCache?.noteIdentity(createHash('sha256').update(pair).digest('hex'))
       this.upstreamAuthDiagnostics.record(attempt, { outcome: 'accepted', stage, status })
       return pair
     } catch (error) {
@@ -3349,7 +3426,7 @@ export class MobileAccessGateway {
         const index = cursor++
         const source = candidates[index]!.url
         const size = await this.upstreamBundleSize(source, signal)
-        if (size === undefined || size >= MAX_MOBILE_BOOT_ENTRY_BYTES) passThrough.add(source)
+        if (size === undefined || size <= 0 || size >= MAX_MOBILE_BOOT_ENTRY_BYTES) passThrough.add(source)
         else sizes.set(source, size)
       }
     }
@@ -3659,6 +3736,192 @@ export class MobileAccessGateway {
     }
   }
 
+  /** Read one bounded request body verbatim; the caller owns replaying it upstream. */
+  private readRequestBody(request: IncomingMessage, limitBytes: number): Promise<Buffer> {
+    const declared = request.headers['content-length']
+    if (declared !== undefined && (!/^\d+$/u.test(declared) || Number(declared) > limitBytes)) {
+      throw new HttpError(413, 'payload_too_large')
+    }
+    return new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = []
+      let received = 0
+      let failed = false
+      request.on('data', (chunk: Buffer) => {
+        if (failed) return
+        received += chunk.length
+        if (received > limitBytes) {
+          failed = true
+          reject(new HttpError(413, 'payload_too_large'))
+          // Drain rather than destroy so the ordinary JSON error can be delivered.
+          request.resume()
+          return
+        }
+        chunks.push(chunk)
+      })
+      request.once('end', () => { if (!failed) resolve(Buffer.concat(chunks)) })
+      request.once('error', error => { if (!failed) reject(error) })
+    })
+  }
+
+  /** One gateway-owned catalog fill: its own socket, rpcId, deadline and byte cap. */
+  private async catalogFill(input: Readonly<{
+    method: CatalogMethod
+    upstream: { cookieHeader: string | undefined }
+  }>): Promise<CatalogFillOutcome> {
+    const rpcId = `dsh-mobile-catalog-${randomUUID()}`
+    const body = JSON.stringify({ type: 'client-request', rpcId, method: input.method, payload: { args: {} } })
+    return await new Promise<CatalogFillOutcome>(resolve => {
+      let settled = false
+      let upstreamRequest!: ClientRequest
+      const finish = (outcome: CatalogFillOutcome): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(absoluteDeadline)
+        this.#catalogFills.delete(upstreamRequest)
+        resolve(outcome)
+      }
+      upstreamRequest = requestHttp({
+        protocol: 'http:',
+        hostname: stripIpv6Brackets(this.config.upstreamOrigin.hostname),
+        port: Number(this.config.upstreamOrigin.port),
+        method: 'POST',
+        path: `/api/${input.method}`,
+        headers: {
+          host: this.config.upstreamOrigin.host,
+          'content-type': 'application/json',
+          accept: 'application/json',
+          'accept-encoding': 'identity',
+          'content-length': String(Buffer.byteLength(body)),
+          ...(input.upstream.cookieHeader === undefined ? {} : { cookie: input.upstream.cookieHeader }),
+        },
+        agent: false,
+      }, response => {
+        const status = response.statusCode ?? 0
+        const rawContentType = String(response.headers['content-type'] ?? '')
+        const mediaType = rawContentType.split(';', 1)[0]?.trim().toLowerCase()
+        const charset = /charset\s*=\s*([^;]+)/iu.exec(rawContentType)?.[1]?.trim().toLowerCase()
+        if (status !== 200
+          || mediaType !== 'application/json'
+          || (charset !== undefined && charset !== 'utf-8' && charset !== 'utf8')
+          || response.headers['set-cookie'] !== undefined
+          || (response.headers['content-encoding'] !== undefined && response.headers['content-encoding'] !== 'identity')) {
+          // The body is unusable and nothing consumes it: tear the socket down
+          // so the flight's accounting matches the settled upstream operation.
+          response.destroy()
+          finish({ shareable: false })
+          return
+        }
+        const chunks: Buffer[] = []
+        let received = 0
+        let overflowed = false
+        response.on('data', (chunk: Buffer) => {
+          if (overflowed) return
+          received += chunk.length
+          if (received > DEFAULT_CATALOG_CACHE_LIMITS.maxEntryBytes) {
+            overflowed = true
+            response.destroy()
+            return
+          }
+          chunks.push(chunk)
+        })
+        response.once('end', () => {
+          if (overflowed) {
+            finish({ shareable: false })
+            return
+          }
+          try {
+            const envelopeJson = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))
+            JSON.parse(envelopeJson)
+            finish({ shareable: true, envelopeJson, upstreamRpcId: rpcId })
+          } catch {
+            finish({ shareable: false })
+          }
+        })
+        response.once('error', () => finish({ shareable: false }))
+        // Destroyed responses (byte-cap abort, socket loss) may close without error.
+        response.once('close', () => finish({ shareable: false }))
+      })
+      // Absolute deadline: a trickling or stalled response must not hold a
+      // fill slot indefinitely; the socket-level timeout below is only secondary.
+      const absoluteDeadline = setTimeout(() => {
+        upstreamRequest.destroy(new Error('catalog fill deadline'))
+      }, this.config.upstreamTimeoutMs)
+      upstreamRequest.setTimeout(this.config.upstreamTimeoutMs, () => {
+        upstreamRequest.destroy(new Error('catalog fill idle timeout'))
+      })
+      upstreamRequest.once('error', () => finish({ shareable: false }))
+      this.#catalogFills.add(upstreamRequest)
+      upstreamRequest.end(body)
+    })
+  }
+
+  /**
+   * Serve one eligible catalog request from the SWR cache.
+   * @returns true when the response was committed here; false for the ordinary path.
+   */
+  private async serveCatalogCache(
+    eligible: Readonly<{ method: CatalogMethod; rpcId: string }>,
+    request: IncomingMessage,
+    response: ServerResponse,
+    authorization: SessionAuthorization,
+  ): Promise<boolean> {
+    const cache = this.catalogCache
+    if (cache === undefined) return false
+    const operation = this.allocateRequest(authorization, response, {})
+    const onClose = (): void => {
+      operation.abort()
+      operation.release()
+    }
+    response.once('close', onClose)
+    try {
+      // Snapshot the upstream identity after body acquisition, immediately
+      // before cache access; fills use exactly this cookie. A renewal that
+      // lands while the snapshot is being taken supersedes it — take the
+      // ordinary path rather than serve or fill under a retired identity.
+      // The gateway's first exchange acquires (not replaces) the identity,
+      // so it does not invalidate the waiting snapshot.
+      const snapshotRevision = this.#upstreamIdentityRevision
+      const hadIdentityBefore = this.upstreamCookie !== undefined
+      const cookieHeader = await waitForRequestTask(this.upstreamCookieHeader(), operation.signal)
+      operation.signal.throwIfAborted()
+      const superseded = hadIdentityBefore && snapshotRevision !== this.#upstreamIdentityRevision
+      if (response.destroyed || superseded) return false
+      const identityDigest = createHash('sha256').update(cookieHeader ?? 'none').digest('hex')
+      cache.noteIdentity(identityDigest)
+      const result: CatalogServeResult = await cache.serve({
+        method: eligible.method,
+        rpcId: eligible.rpcId,
+        identityDigest,
+        upstream: { cookieHeader },
+      })
+      operation.signal.throwIfAborted()
+      if (result.kind === 'passthrough' || !cache.canCommit(result) || response.destroyed) return false
+      const payload = Buffer.from(result.body, 'utf8')
+      const headers: OutgoingHttpHeaders = {
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+        [CATALOG_CACHE_MARKER]: result.kind,
+      }
+      let body = payload
+      if (acceptsGzip(request.headers['accept-encoding']) && payload.length >= MIN_COMPRESSIBLE_BYTES) {
+        body = await gzipBuffer(payload)
+        headers['content-encoding'] = 'gzip'
+        addVaryAcceptEncoding(headers)
+      }
+      // Asynchronous preparation may straddle an invalidation: recheck the
+      // generation and age immediately before committing response bytes.
+      if (!cache.canCommit(result) || response.destroyed) return false
+      headers['content-length'] = body.length
+      setSecurityHeaders(response, this.tlsEnabled, 'proxied')
+      response.writeHead(200, headers)
+      response.end(body)
+      return true
+    } finally {
+      response.removeListener('close', onClose)
+      operation.release()
+    }
+  }
+
   /**
    * Proxy one request, retrying transient failures for plugin and asset GETs.
    * Only bodyless GETs can be replayed, before response headers reach the client.
@@ -3670,6 +3933,7 @@ export class MobileAccessGateway {
     response: ServerResponse,
     authorization: SessionAuthorization,
     documentView?: MobileDocumentView,
+    bodyOverride?: Buffer,
   ): Promise<void> {
     const declared = request.headers['content-length']
     if (declared !== undefined && (!/^\d+$/u.test(declared) || Number(declared) > this.config.maxBodyBytes)) {
@@ -3711,7 +3975,7 @@ export class MobileAccessGateway {
       for (let attempt = 1; attempt <= attempts; attempt++) {
         operation.signal.throwIfAborted()
         try {
-          await this.proxyHttpOnce(request, response, holder, operation.signal, replayable, documentView)
+          await this.proxyHttpOnce(request, response, holder, operation.signal, replayable, documentView, bodyOverride)
           return
         } catch (error) {
           if (operation.signal.aborted || response.destroyed) return
@@ -3742,6 +4006,7 @@ export class MobileAccessGateway {
     signal: AbortSignal,
     replayable: boolean,
     documentView?: MobileDocumentView,
+    bodyOverride?: Buffer,
   ): Promise<void> {
     let bodyDone: Promise<void> | undefined
     const projections = new Set<Promise<unknown>>()
@@ -3779,7 +4044,8 @@ export class MobileAccessGateway {
         }
         upstreamRequest.once('response', resolve)
         upstreamRequest.once('error', reject)
-        if (replayable) upstreamRequest.end()
+        if (bodyOverride !== undefined) upstreamRequest.end(bodyOverride)
+        else if (replayable) upstreamRequest.end()
         else {
           bodyDone = pipeline(request, new ByteLimitTransform(this.config.maxBodyBytes), upstreamRequest)
           void bodyDone.catch(reject)
@@ -3814,6 +4080,13 @@ export class MobileAccessGateway {
         delete headers['accept-ranges']
       }
       const statusCode = proxied.statusCode ?? 502
+      // Invalidate before a catalog-affecting mutation's 2xx response is
+      // committed downstream.
+      if (statusCode >= 200 && statusCode < 300 && this.catalogCache !== undefined
+        && pathname.startsWith('/api/')
+        && CATALOG_MUTATION_METHODS.has(pathname.slice('/api/'.length))) {
+        this.catalogCache.noteCatalogMutation()
+      }
       this.httpFailures.recordUpstream(request.method, request.url?.split('?', 1)[0] ?? '', statusCode)
       const cacheControl = graphEvents ? undefined : revisionedStaticCacheControl(request, statusCode)
       if (cacheControl !== undefined) headers['cache-control'] = cacheControl
@@ -3889,11 +4162,30 @@ export class MobileAccessGateway {
     for (const listener of this.extensionEventListeners) listener(this.extensionEventRevision)
   }
 
-  /** Fan a completed task to every phone holding this gateway's event stream. */
-  broadcastTaskEvent(event: { readonly sessionId: string; readonly turn: number }): void {
+  /**
+   * Fan a completed task to every phone holding this gateway's event stream.
+   *
+   * `sessionId` and `turn` always stay; `title`/`body` are optional and are
+   * emitted together so an older App ignores them and falls back to its own
+   * localized text. This layer re-bounds the strings (code-point safe) instead
+   * of trusting the caller; redaction is deliberately owned only by the
+   * task-events derivation, not repeated here, because this method is also
+   * callable by fixtures that bypass the watcher.
+   */
+  broadcastTaskEvent(event: {
+    readonly sessionId: string
+    readonly turn: number
+    readonly title?: string
+    readonly body?: string
+  }): void {
     if (this.closing) return
-    const payload = JSON.stringify({ sessionId: String(event.sessionId), turn: Number(event.turn) || 0 })
-    for (const listener of this.taskEventListeners) listener(payload)
+    const payload: Record<string, string | number> = { sessionId: String(event.sessionId), turn: Number(event.turn) || 0 }
+    if (typeof event.title === 'string' && event.title !== '' && typeof event.body === 'string' && event.body !== '') {
+      payload.title = Array.from(event.title).slice(0, TASK_ANNOUNCEMENT_LIMITS.title).join('')
+      payload.body = Array.from(event.body).slice(0, TASK_ANNOUNCEMENT_LIMITS.body).join('')
+    }
+    const serialized = JSON.stringify(payload)
+    for (const listener of this.taskEventListeners) listener(serialized)
   }
 
   /** Notify only the device whose persistent credential was revoked by the Host. */
@@ -3972,6 +4264,59 @@ export class MobileAccessGateway {
     })
     response.write('retry: 2000\n: ready\n\n')
     this.extensionEventListeners.add(send)
+    this.taskEventListeners.add(sendTask)
+    const deviceListeners = this.deviceEventListeners.get(authorization.deviceId) ?? new Set<(payload: string) => void>()
+    deviceListeners.add(sendDevice)
+    this.deviceEventListeners.set(authorization.deviceId, deviceListeners)
+    heartbeat = setInterval(() => {
+      if (!closed && !response.destroyed && !response.writableEnded) response.write(': heartbeat\n\n')
+    }, EXTENSION_EVENT_HEARTBEAT_MS)
+    heartbeat.unref()
+    request.once('aborted', close)
+    response.once('close', close)
+  }
+
+  /**
+   * Native background notifications need only Host task and revocation events.
+   * They use the paired session cookie but no mobile document view, because the
+   * App has no live WebView while this stream is serving a suspended page.
+   */
+  private openBackgroundEventStream(
+    request: IncomingMessage,
+    response: ServerResponse,
+    authorization: SessionAuthorization,
+  ): void {
+    const operation = this.allocateRequest(authorization, response, {})
+    let closed = false
+    let heartbeat: NodeJS.Timeout | undefined
+    const close = (): void => {
+      if (closed) return
+      closed = true
+      if (heartbeat !== undefined) clearInterval(heartbeat)
+      this.taskEventListeners.delete(sendTask)
+      const deviceListeners = this.deviceEventListeners.get(authorization.deviceId)
+      deviceListeners?.delete(sendDevice)
+      if (deviceListeners?.size === 0) this.deviceEventListeners.delete(authorization.deviceId)
+      request.removeListener('aborted', close)
+      response.removeListener('close', close)
+      operation.release()
+    }
+    const sendTask = (payload: string): void => {
+      if (closed || response.destroyed || response.writableEnded) return
+      response.write(`event: task-notify\ndata: ${payload}\n\n`)
+    }
+    const sendDevice = (payload: string): void => {
+      if (closed || response.destroyed || response.writableEnded) return
+      response.write(`event: device-revoked\ndata: ${payload}\n\n`)
+    }
+    setSecurityHeaders(response, this.tlsEnabled)
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    })
+    response.write('retry: 2000\n: ready\n\n')
     this.taskEventListeners.add(sendTask)
     const deviceListeners = this.deviceEventListeners.get(authorization.deviceId) ?? new Set<(payload: string) => void>()
     deviceListeners.add(sendDevice)
@@ -4108,9 +4453,37 @@ export class MobileAccessGateway {
       client.destroy()
       upstream.destroy()
     }
+    // Set once the compression bridge accepts the client; closing through it stops the
+    // relay before the close handshake, so no data frame can follow the Close frame.
+    let closeCompressedBridge: ((code: number, reason: string) => void) | undefined
+    // At `expiresAt` this stream used to be destroyed outright: the browser saw an abnormal close
+    // (1006) and the page reported "connection lost" while it renewed. A WebSocket close frame
+    // (1000, normal closure) lets the client treat it as an orderly end of stream instead.
+    const finishGracefully = (): void => {
+      // RFC 6455 §5.5.1: a data frame must not follow a Close frame. Stop the
+      // upstream→client flow before writing the Close frame; the grace period below
+      // only covers the peer's Close echo and the TCP teardown.
+      if (closeCompressedBridge !== undefined) {
+        closeCompressedBridge(1000, 'session expired')
+      } else {
+        upstream.unpipe(client)
+        client.unpipe(upstream)
+        upstream.pause()
+        const sendCloseFrame = (socket: typeof client): void => {
+          if (socket.destroyed || !socket.writable) return
+          try {
+            socket.write(Buffer.from([0x88, 0x02, 0x03, 0xe8]))
+          } catch {
+            // A socket that cannot take the frame is already gone; the destroy below finishes it.
+          }
+        }
+        sendCloseFrame(client)
+      }
+      setTimeout(closeBoth, 50).unref()
+    }
     client.on('error', closeBoth)
     upstream.on('error', closeBoth)
-    const timer = setTimeout(closeBoth, Math.max(1, authorization.expiresAt - Date.now()))
+    const timer = setTimeout(finishGracefully, Math.max(1, authorization.expiresAt - Date.now()))
     timer.unref()
     const record: ActiveWebSocket = Object.freeze({ ...authorization, client, upstream, timer })
     this.activeWebSockets.set(id, record)
@@ -4129,10 +4502,11 @@ export class MobileAccessGateway {
         const compressionTarget = upstreamTarget
         compressionTarget.pathname = target.pathname
         compressionTarget.search = target.search
-        await bridgeCompressedWebSocket(
+        const bridge = await bridgeCompressedWebSocket(
           request, client, upstream, head, compressionTarget, upstreamCookie,
           this.config.websocketCompression, this.config.upstreamTimeoutMs,
         )
+        closeCompressedBridge = (code, reason) => { bridge.close(code, reason) }
         return
       }
       await new Promise<void>((resolve, reject) => {
@@ -4283,6 +4657,9 @@ export class MobileAccessGateway {
 
   private async performClose(): Promise<void> {
     this.closing = true
+    this.#catalogCache?.dispose()
+    for (const fill of this.#catalogFills) fill.destroy(new Error('gateway closing'))
+    this.#catalogFills.clear()
     const detachPushOrigin = this.detachPushOrigin
     this.detachPushOrigin = undefined
     detachPushOrigin?.()

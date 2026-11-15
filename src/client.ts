@@ -1,4 +1,4 @@
-import { createElement, useEffect, useState, useSyncExternalStore } from 'react'
+import { createElement, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   DIAGNOSTIC_REASON_MESSAGES,
   DIAGNOSTIC_NETWORK_MESSAGES,
@@ -15,11 +15,21 @@ import { installNativeMobileSurface, NATIVE_MOBILE_STYLES, resolveNativeMobileLa
 import { installVoiceSession } from './voice-session.js'
 import { installDraftTransfer } from './draft-transfer.js'
 import { installMobileFontPreference, MobileFontSizeRow } from './mobile-font.js'
+import { COMPOSER_COLLAPSE_SETTINGS_ORDER, ComposerCollapseSettings } from './composer-collapse-settings.js'
 import { MobileDisplayScaleRow } from './mobile-display-scale.js'
 import { MobileNativeSettingsActionController, type MobileNativeSettingsAction } from './mobile-native-settings-action.js'
 import { CLIENT_MODULE_STYLES, ClientModuleSettingsRow, closeClientModuleDialog, disposeClientModuleDialogs } from './client-module-ui.js'
 import { isDesktopAdminSurface, localAdminRequestHeaders } from './local-admin-host.js'
-import { fireDeviceRevoked, fireTaskNotifyEvent, isDeviceRevokedPayload, parseTaskNotifyPayload, taskCompletionTag } from './task-notify.js'
+import {
+  decodeTaskNotificationNavigate,
+  fireDeviceRevoked,
+  fireTaskNotifyEvent,
+  isDeviceRevokedPayload,
+  parseTaskNotifyPayload,
+  sessionIdFromNotificationRoute,
+  taskCompletionTag,
+  taskNotificationNavigate,
+} from './task-notify.js'
 import { EXTENSION_RECOVERY_STYLES, installExtensionRecoveryControl } from './extension-recovery-ui.js'
 import { invokeBoundNativeCapability } from './native-capability.js'
 import { pickBrowserFiles } from './browser-file-picker.js'
@@ -31,11 +41,17 @@ import { installMobileUiLocalePersistence } from './mobile-ui-locale.js'
 import { createMobilePushBrowserApi, type MobilePushBrowserApi } from './mobile-push/browser-api.js'
 import { browserPushEnvironment, createMobilePushController, type MobilePushEnvironment } from './mobile-push/client.js'
 import { MobilePushSettings } from './mobile-push/settings.js'
+import { SESSION_PREFETCH_SETTINGS_ORDER, SessionPrefetchSettings } from './session-prefetch-settings.js'
 import { installPushNavigation } from './mobile-push/navigation.js'
 import { dismissMobileDirectoryPicker, hasUpstreamBrowsePicker, installMobileDirectoryPicker } from './mobile-directory-picker.js'
 
 export { shouldNudgeReconnect, shouldRenewSession } from './client-recovery.js'
 export type { MobileConnectionState } from './client-recovery.js'
+
+// The reading-mode opt-in lives in this bundle (the settings row writes it) while
+// the layout bundle reads it; publishing both sides keeps the cross-bundle
+// contract driveable from the shipped bundles in the browser fixture.
+export { readComposerCollapseEnabled, writeComposerCollapseEnabled } from './composer-collapse.js'
 
 export { DIAGNOSTIC_REASON_MESSAGES, DIAGNOSTIC_NETWORK_MESSAGES, DIAGNOSTIC_SCOPE_MESSAGES, LOCALIZED_DIAGNOSTIC_COPY, MOBILE_CONTROL_MESSAGES } from './client-messages.js'
 export type { MobileControlLocale } from './client-messages.js'
@@ -524,6 +540,157 @@ function MobileTaskNotificationRow(): unknown {
   )
 }
 
+interface MobileBackgroundNotificationCopy {
+  readonly title: string
+  readonly description: string
+  readonly enabled: string
+  readonly disabled: string
+  readonly busy: string
+  readonly error: string
+  readonly connected: string
+  readonly disconnected: string
+}
+
+function mobileBackgroundNotificationCopy(locale: MobileControlLocale): MobileBackgroundNotificationCopy {
+  if (locale === 'zh') return {
+    title: '后台任务提醒',
+    description: 'App 页面被系统挂起后，通过可关闭的常驻连接继续接收任务完成提醒。',
+    enabled: '关闭后台提醒',
+    disabled: '开启后台提醒',
+    busy: '正在处理…',
+    error: '无法更新后台提醒；请确认任务通知权限和当前连接。',
+    connected: '已连接',
+    disconnected: '未连接',
+  }
+  if (locale === 'it') return {
+    title: 'Promemoria in background',
+    description: 'Continua a ricevere gli avvisi quando Android sospende la pagina, tramite una connessione persistente disattivabile.',
+    enabled: 'Disattiva promemoria',
+    disabled: 'Attiva promemoria',
+    busy: 'Operazione…',
+    error: 'Impossibile aggiornare i promemoria; controlla il permesso notifiche e la connessione attiva.',
+    connected: 'Connesso',
+    disconnected: 'Non connesso',
+  }
+  return {
+    title: 'Background task reminders',
+    description: 'Keep receiving completion alerts after Android suspends the page, through a dismissible persistent connection.',
+    enabled: 'Disable background reminders',
+    disabled: 'Enable background reminders',
+    busy: 'Working…',
+    error: 'Could not update background reminders. Check notification permission and the active connection.',
+    connected: 'Connected',
+    disconnected: 'Not connected',
+  }
+}
+
+/** Render the App's real connection state when the installed App reports it. */
+export function mobileBackgroundStatusText(
+  locale: MobileControlLocale,
+  connected: boolean | undefined,
+  lastError: string | undefined,
+): string | undefined {
+  if (connected === undefined) return undefined
+  const copy = mobileBackgroundNotificationCopy(locale)
+  if (connected) return copy.connected
+  return lastError === undefined ? copy.disconnected : `${copy.disconnected} (${lastError})`
+}
+
+/** Android-only opt-in for the foreground SSE fallback when the WebView is suspended. */
+function MobileBackgroundNotificationRow(): unknown {
+  const [supported, setSupported] = useState(false)
+  const [enabled, setEnabled] = useState(false)
+  const [connected, setConnected] = useState<boolean | undefined>(undefined)
+  const [lastError, setLastError] = useState<string | undefined>(undefined)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(false)
+  const generation = useRef(0)
+  useEffect(() => {
+    let active = true
+    const refresh = (): void => {
+      const attempt = ++generation.current
+      const bridge = window.__DSH_MOBILE_NATIVE__
+      if (bridge === undefined) {
+        if (active) { setSupported(false); setError(false) }
+        return
+      }
+      void Promise.resolve(bridge.capabilities()).then(async capabilities => {
+        const available = capabilities.includes('notification.background.get') && capabilities.includes('notification.background.set')
+        if (!active || attempt !== generation.current) return
+        setSupported(available)
+        if (!available) return
+        const result = await bridge.invoke('notification.background.get', {}) as {
+          readonly enabled?: unknown
+          readonly connected?: unknown
+          readonly lastError?: unknown
+        }
+        if (!active || attempt !== generation.current) return
+        if (typeof result?.enabled !== 'boolean') throw new Error('invalid background notification status')
+        setEnabled(result.enabled)
+        setConnected(typeof result.connected === 'boolean' ? result.connected : undefined)
+        setLastError(typeof result.lastError === 'string' ? result.lastError : undefined)
+        setError(false)
+      }).catch(() => {
+        if (active && attempt === generation.current) { setSupported(true); setError(true) }
+      })
+    }
+    refresh()
+    window.addEventListener('dsh-mobile-native-ready', refresh)
+    return () => {
+      active = false
+      generation.current += 1
+      window.removeEventListener('dsh-mobile-native-ready', refresh)
+    }
+  }, [])
+  if (!supported) return null
+  const locale = selectedMobileControlLocale()
+  const copy = mobileBackgroundNotificationCopy(locale)
+  const statusText = enabled ? mobileBackgroundStatusText(locale, connected, lastError) : undefined
+  const toggle = (): void => {
+    const bridge = window.__DSH_MOBILE_NATIVE__
+    if (bridge === undefined || busy) return
+    const attempt = ++generation.current
+    setBusy(true); setError(false)
+    void bridge.invoke('notification.background.set', { enabled: !enabled }).then(result => {
+      if (attempt !== generation.current) return
+      const next = (result as { readonly enabled?: unknown } | undefined)?.enabled
+      if (typeof next !== 'boolean') throw new Error('invalid background notification status')
+      setEnabled(next)
+      // The set acknowledgement only carries `enabled`; read the connection state that the
+      // service just started to settle on.
+      void bridge.invoke('notification.background.get', {}).then(statusResult => {
+        if (attempt !== generation.current) return
+        const status = statusResult as {
+          readonly enabled?: unknown
+          readonly connected?: unknown
+          readonly lastError?: unknown
+        } | undefined
+        if (typeof status?.enabled === 'boolean') setEnabled(status.enabled)
+        setConnected(typeof status?.connected === 'boolean' ? status.connected : undefined)
+        setLastError(typeof status?.lastError === 'string' ? status.lastError : undefined)
+      }).catch(() => undefined)
+    }).catch(() => {
+      if (attempt === generation.current) setError(true)
+    }).finally(() => {
+      if (attempt === generation.current) setBusy(false)
+    })
+  }
+  return createElement('div', { className: 'dsh-mobile-settings_row', lang: locale },
+    createElement('div', { className: 'dsh-mobile-settings_rowText' },
+      createElement('div', { className: 'dsh-mobile-settings_title' }, copy.title),
+      createElement('div', { className: 'dsh-mobile-settings_desc', 'aria-live': 'polite' }, error ? copy.error : statusText ?? copy.description),
+    ),
+    createElement('button', {
+      type: 'button',
+      className: 'dsh-mobile-settings_selector',
+      disabled: busy,
+      'aria-busy': busy ? 'true' : undefined,
+      'aria-pressed': enabled ? 'true' : 'false',
+      onClick: toggle,
+    }, busy ? copy.busy : enabled ? copy.enabled : copy.disabled),
+  )
+}
+
 const CONTROL_REQUEST_TIMEOUT_MS = 15_000
 const LONG_CONTROL_REQUEST_TIMEOUT_MS = 210_000
 const GITHUB_RELEASES_URL = 'https://github.com/saya-ch/dsh-mobile/releases'
@@ -836,6 +1003,7 @@ const REMOTE_ERROR_MESSAGE_KEYS: Readonly<Record<string, string>> = {
   frp_exited: 'frpExited',
   iroh_companion_missing: 'irohCompanionMissing',
   iroh_data_directory_invalid: 'irohDataDirectoryInvalid',
+  iroh_data_directory_insecure: 'irohDataDirectoryInsecure',
   iroh_sidecar_invalid: 'irohSidecarInvalid',
   iroh_download_failed: 'irohDownloadFailed',
   iroh_download_size_mismatch: 'irohDownloadFailed',
@@ -1561,7 +1729,9 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   const remoteAccessLink = element('a', 'dsh-mobile-control__access-link'); remoteAccessLink.target = '_blank'; remoteAccessLink.rel = 'noreferrer'; remoteAccess.append(remoteAccessLabel, remoteAccessLink)
   const remoteQr = element('div', 'dsh-mobile-control__qr'); remoteQr.hidden = true
   const remoteStatus = element('p', 'dsh-mobile-control__status'); remoteStatus.textContent = t('loadingRemoteStatus'); remoteStatus.setAttribute('aria-live', 'polite')
-  const remoteGuide = element('section', 'dsh-mobile-control__guide'); remoteGuide.hidden = true; remoteGuide.setAttribute('aria-label', t('funnelGuideAria'))
+  const remoteGuide = element('section', 'dsh-mobile-control__guide'); remoteGuide.hidden = true
+  remoteGuide.dataset.dshMobileGuide = 'funnel'
+  remoteGuide.setAttribute('aria-label', t('funnelGuideAria'))
   const remoteGuideTitle = element('h3', 'dsh-mobile-control__guide-title'); remoteGuideTitle.textContent = t('funnelGuideTitle')
   const remoteGuideSummary = element('p', 'dsh-mobile-control__guide-summary'); remoteGuideSummary.textContent = t('funnelGuideSummary')
   const remoteGuideSteps = element('ol', 'dsh-mobile-control__guide-steps')
@@ -1573,6 +1743,20 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   const remoteSetup = element('button', 'dsh-mobile-control__primary'); remoteSetup.type = 'button'; remoteSetup.textContent = t('continueFunnel')
   const remoteSetupRetry = element('button', 'dsh-mobile-control__secondary'); remoteSetupRetry.type = 'button'; remoteSetupRetry.textContent = t('retryNow')
   remoteGuideActions.append(remoteSetup, remoteSetupRetry); remoteGuide.append(remoteGuideTitle, remoteGuideSummary, remoteGuideSteps, remoteGuideNote, remoteGuideActions)
+  // macOS only: the host reports whether Full Disk Access is already granted.
+  // Shown once per session while the grant is missing, and never on other platforms.
+  const remotePermission = element('section', 'dsh-mobile-control__guide'); remotePermission.hidden = true
+  remotePermission.dataset.dshMobileGuide = 'mac-file-access'
+  remotePermission.setAttribute('aria-label', t('macPermissionTitle'))
+  remotePermission.setAttribute('role', 'status')
+  const remotePermissionTitle = element('h3', 'dsh-mobile-control__guide-title'); remotePermissionTitle.textContent = t('macPermissionTitle')
+  const remotePermissionSummary = element('p', 'dsh-mobile-control__guide-summary'); remotePermissionSummary.textContent = t('macPermissionSummary')
+  const remotePermissionSteps = element('p', 'dsh-mobile-control__guide-note'); remotePermissionSteps.textContent = t('macPermissionSteps')
+  const remotePermissionActions = element('div', 'dsh-mobile-control__guide-actions')
+  const remotePermissionOpen = element('button', 'dsh-mobile-control__primary'); remotePermissionOpen.type = 'button'; remotePermissionOpen.textContent = t('macPermissionOpen')
+  const remotePermissionDismissButton = element('button', 'dsh-mobile-control__secondary'); remotePermissionDismissButton.type = 'button'; remotePermissionDismissButton.textContent = t('macPermissionDismiss')
+  remotePermissionActions.append(remotePermissionOpen, remotePermissionDismissButton)
+  remotePermission.append(remotePermissionTitle, remotePermissionSummary, remotePermissionSteps, remotePermissionActions)
   const remoteActions = element('div', 'dsh-mobile-control__actions')
   const remoteToggle = element('button', 'dsh-mobile-control__primary'); remoteToggle.type = 'button'; remoteToggle.textContent = t('enableRemote')
   const remoteLogin = element('button', 'dsh-mobile-control__primary'); remoteLogin.type = 'button'; remoteLogin.textContent = t('continueLogin'); remoteLogin.hidden = true
@@ -1749,7 +1933,7 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   macosFolderHelpBody.append(macosFolderHelpNote)
   macosFolderHelp.append(macosFolderHelpSummary, macosFolderHelpBody)
   setupDetailsRow.append(macosFolderHelp)
-  remoteWorkspace.append(remoteStatus, remoteAccess, remoteGuide, providerSetupBody, remoteQr, pairingValidity, providerInstallRow, remoteActions, remotePairLink, setupDetailsRow)
+  remoteWorkspace.append(remoteStatus, remoteAccess, remoteGuide, remotePermission, providerSetupBody, remoteQr, pairingValidity, providerInstallRow, remoteActions, remotePairLink, setupDetailsRow)
   const diagnosticsView = element('div', 'dsh-mobile-control__view is-diagnostics'); diagnosticsView.hidden = true
   // Paired-device management is its own page (like diagnostics), reached from the
   // LAN view's "Manage paired devices" button, instead of expanding inline.
@@ -1821,6 +2005,7 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   let remoteLoginUrl = ''
   let remoteSetupUrl = ''
   let remoteSetupPending = false
+  let remotePermissionDismissed = false
   let remoteSetupOpenedAt = 0
   let remoteReconnectBusy = false
   let remoteProviderBusy = false
@@ -2703,6 +2888,9 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
     const needsFunnelSetup = state === 'error' && remoteSetupUrl !== ''
     remoteReady = remoteRunning && state === 'ready' && remoteOrigin !== ''
     macosFolderHelp.hidden = data.macosHost !== true || !remoteReady
+    // Absent on every other platform, so Windows and Linux never see this block.
+    const macFileAccess = data.macFileAccess === 'missing' ? 'missing' : data.macFileAccess === 'ok' ? 'ok' : undefined
+    remotePermission.hidden = macFileAccess !== 'missing' || remotePermissionDismissed || !remoteReady
     frpChoiceBadge.textContent = frpConfigured && frpInstalled ? t('ready') : t('advanced')
     originChoiceBadge.textContent = managedOrigin ? t(remoteReady ? 'ready' : 'advanced') : originListening ? t('originBackendReady') : t('advanced')
     // The selected provider and its state already live in the left column. The
@@ -3897,6 +4085,15 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   }
   remoteReconnect.addEventListener('click', reconnectRemote)
   remoteSetupRetry.addEventListener('click', () => { remoteSetupPending = false; reconnectRemote() })
+  // The renderer cannot open x-apple.systempreferences itself; the host runs
+  // `open` on the Mac that owns this app.
+  remotePermissionOpen.addEventListener('click', () => {
+    void controlRequestJson('/api/mobile-access/remote/macos-file-access/open-settings', { method: 'POST' }).catch(() => {})
+  })
+  remotePermissionDismissButton.addEventListener('click', () => {
+    remotePermissionDismissed = true
+    remotePermission.hidden = true
+  })
   remoteSetup.addEventListener('click', () => {
     if (remoteSetupUrl === '') return
     remoteSetupPending = true
@@ -5252,6 +5449,7 @@ export function installCustomAssets(recovery?: {
         title: label('Attività completata', 'Task finished', '任务已完成'),
         body: label('Il tuo task DSH è terminato', 'Your DSH task finished', '你的 DSH 任务已完成'),
         tag: taskCompletionTag(parsed.sessionId, parsed.turn),
+        navigate: taskNotificationNavigate(parsed.sessionId),
       })
     },
     () => { fireDeviceRevoked() },
@@ -5446,6 +5644,88 @@ function showMobilePushNavigationNotice(page: Document, view: Window, key: 'sess
   view.setTimeout(() => node.remove(), 3_000)
 }
 
+/** Consume the Android background service's opaque Session route on cold or warm launch. */
+export function installTaskNotificationNavigation(ctx: ClientContext, page: Document, view: Window): () => void {
+  if (view.__DSH_MOBILE_FRONTEND__ !== 'dedicated' || ctx.inject === undefined) return () => undefined
+  const pending = new URLSearchParams(view.location.search).get('dsh-session')
+  if (pending === null) return () => undefined
+  let closed = false
+  let removeNavigation: (() => void) | undefined
+  const fiber = ctx.inject(mobilePushNavigationServices, navigationContext => {
+    if (closed) return () => undefined
+    const reference = new URLSearchParams(view.location.search).get('dsh-session')
+    if (reference === null) return () => undefined
+    const remove = installPushNavigation(navigationContext as unknown as Parameters<typeof installPushNavigation>[0], {
+      parameter: 'dsh-session',
+      resolve: async value => {
+        const sessionId = decodeTaskNotificationNavigate(value)
+        return sessionId === undefined ? undefined : { sessionId, interaction: 'current' }
+      },
+      notify: key => {
+        if (key === 'session-unavailable' || key === 'session-resolved') {
+          showMobilePushNavigationNotice(page, view, key)
+        }
+      },
+      browser: { location: view.location, history: view.history },
+    })
+    removeNavigation = remove
+    return () => {
+      if (removeNavigation === remove) removeNavigation = undefined
+      remove()
+    }
+  })
+  return () => {
+    if (closed) return
+    closed = true
+    removeNavigation?.()
+    removeNavigation = undefined
+    void fiber.dispose()
+  }
+}
+
+/**
+ * Open a Session in the live page from an Android notification tap. The App calls this through
+ * `window.__dshMobileOpenSession` instead of reloading the document; returning false asks the App
+ * to fall back to a route navigation (for example while the page is still booting).
+ */
+export function installNativeNotificationNavigation(ctx: ClientContext, view: Window): () => void {
+  if (view.__DSH_MOBILE_FRONTEND__ !== 'dedicated' || ctx.inject === undefined) return () => undefined
+  let closed = false
+  const target = view as unknown as { __dshMobileOpenSession?: (route: unknown) => boolean }
+  const fiber = ctx.inject(mobilePushNavigationServices, navigationContext => {
+    if (closed) return () => undefined
+    const context = navigationContext as unknown as {
+      readonly uiWorkspace?: { openSession(sessionId: string): void }
+      readonly sessions?: { readonly list: { getSnapshot(): { readonly phase: string; readonly ids: readonly string[] } } }
+    }
+    const open = (route: unknown): boolean => {
+      if (closed || typeof route !== 'string') return false
+      const sessionId = sessionIdFromNotificationRoute(route)
+      if (sessionId === undefined) return false
+      const workspace = context.uiWorkspace
+      if (workspace === undefined || typeof workspace.openSession !== 'function') return false
+      const sessions = context.sessions?.list.getSnapshot()
+      if (sessions !== undefined && sessions.phase === 'ready' && !sessions.ids.includes(sessionId)) return false
+      try {
+        workspace.openSession(sessionId)
+        return true
+      } catch {
+        return false
+      }
+    }
+    target.__dshMobileOpenSession = open
+    return () => {
+      if (target.__dshMobileOpenSession === open) delete target.__dshMobileOpenSession
+    }
+  })
+  return () => {
+    if (closed) return
+    closed = true
+    delete target.__dshMobileOpenSession
+    void fiber.dispose()
+  }
+}
+
 /** Own the browser-only push controller, settings row, and optional authenticated tap navigation. */
 export function installMobilePushBrowserClient(ctx: ClientContext, runtime: MobilePushEntryRuntime): () => void {
   const { page, view } = runtime
@@ -5521,6 +5801,18 @@ export function installMobilePushBrowserClient(ctx: ClientContext, runtime: Mobi
   }
 }
 
+/**
+ * Register the session-prefetch opt-in on every dedicated Mobile page, including the Android
+ * App webview. The row used to live inside the browser-push installer, which returns early when
+ * the native bridge exists, so App users never saw the switch for a layout-side feature they use.
+ */
+export function installSessionPrefetchSettings(ctx: ClientContext, view: Window): () => void {
+  if (view.__DSH_MOBILE_FRONTEND__ !== 'dedicated') return () => undefined
+  return ctx.slots.inject('settings.general.item', () => ctx.slots.register({
+    name: 'settings.general.item', id: 'dsh-mobile-session-prefetch', order: SESSION_PREFETCH_SETTINGS_ORDER,
+  }, () => createElement(SessionPrefetchSettings, { locale: selectedMobileControlLocale() })))
+}
+
 /** Mount the desktop control or mobile feature enhancements. */
 export function apply(ctx: ClientContext): void {
   let gatewayRejectionSink: ((status: number) => void) | undefined
@@ -5551,6 +5843,9 @@ export function apply(ctx: ClientContext): void {
   }, 'dsh-mobile: connection recovery')
 
   ctx.effect(() => installMobilePushBrowserClient(ctx, { page: document, view: window }), 'dsh-mobile: authenticated browser push lifecycle')
+  ctx.effect(() => installTaskNotificationNavigation(ctx, document, window), 'dsh-mobile: native task notification navigation')
+  ctx.effect(() => installNativeNotificationNavigation(ctx, window), 'dsh-mobile: in-page notification navigation')
+  ctx.effect(() => installSessionPrefetchSettings(ctx, window), 'dsh-mobile: session prefetch settings')
 
   ctx.effect(() => {
     const desktopAdmin = isDesktopAdminSurface(location.hostname, location.search, window.__DSH_MOBILE_FRONTEND__, location.protocol)
@@ -5580,6 +5875,9 @@ export function apply(ctx: ClientContext): void {
         const removeFontSize = ctx.slots.register({
           name: 'settings.general.item', id: 'font-size', order: 11, priority: -1,
         }, () => createElement(MobileFontSizeRow, { preference: localFont.preference, locale: selectedMobileControlLocale() }))
+        const removeComposerCollapse = ctx.slots.register({
+          name: 'settings.general.item', id: 'dsh-mobile-composer-collapse', order: COMPOSER_COLLAPSE_SETTINGS_ORDER,
+        }, () => createElement(ComposerCollapseSettings, { locale: selectedMobileControlLocale() }))
         const removeDisplayScale = ctx.slots.register({
           name: 'settings.general.item', id: 'dsh-mobile-display-scale', order: 12,
         }, () => createElement(MobileDisplayScaleRow, { locale: selectedMobileControlLocale() }))
@@ -5593,7 +5891,19 @@ export function apply(ctx: ClientContext): void {
           id: 'dsh-mobile-task-notifications',
           order: 110,
         }, MobileTaskNotificationRow)
-        return () => { removeTaskNotifications(); removeSwitchComputer(); removeDisplayScale(); removeFontSize() }
+        const removeBackgroundNotifications = ctx.slots.register({
+          name: 'settings.general.item',
+          id: 'dsh-mobile-background-notifications',
+          order: 111,
+        }, MobileBackgroundNotificationRow)
+        return () => {
+          removeBackgroundNotifications()
+          removeTaskNotifications()
+          removeSwitchComputer()
+          removeDisplayScale()
+          removeComposerCollapse()
+          removeFontSize()
+        }
       })
       const removeSurface = installDshLanguageBoundSurface(() => installNativeMobileSurface({
         getLayout: () => ctx.get('layout'),

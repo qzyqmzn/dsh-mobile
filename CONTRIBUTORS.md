@@ -4,6 +4,40 @@ GitHub 的 [Contributors 图表](https://github.com/saya-ch/dsh-mobile/graphs/co
 
 GitHub's Contributors graph counts commits on the default branch; issue reports and PR proposals cannot be manually added to it. This page credits community members by how they contributed. The repository maintainer and automated dependency updates remain visible in GitHub's history.
 
+## 下一版本贡献 / Contributions for the next release
+
+本节随下一个版本更新 / Updated with the next release.
+
+## 0.8.9 贡献 / Contributions in 0.8.9
+
+感谢 [@bvbhu](https://github.com/bvbhu) 在 [#403](https://github.com/saya-ch/dsh-mobile/pull/403) 提供便携 Windows 客户端（已合入 main，尚未随版本发布）；感谢 [@chintoleung](https://github.com/chintoleung) 在 [#420](https://github.com/saya-ch/dsh-mobile/pull/420) 实现移动页路径点按复制；感谢 [@fgql](https://github.com/fgql) 在 [#422](https://github.com/saya-ch/dsh-mobile/issues/422) 提供来源网段配对失败的完整复现。
+
+Thanks [@bvbhu](https://github.com/bvbhu) for the portable Windows client in [#403](https://github.com/saya-ch/dsh-mobile/pull/403) (merged into main, not released yet); thanks [@chintoleung](https://github.com/chintoleung) for the tap-to-copy path implementation in [#420](https://github.com/saya-ch/dsh-mobile/pull/420); thanks [@fgql](https://github.com/fgql) for the complete reproduction of the source-network pairing failure in [#422](https://github.com/saya-ch/dsh-mobile/issues/422).
+
+## 0.8.8 贡献 / Contributions in 0.8.8
+
+感谢 [@chintoleung](https://github.com/chintoleung) 在 [#407](https://github.com/saya-ch/dsh-mobile/issues/407) 报告 DSH 0.2.2-rc.2 下 Web Push 不可用，并提供 [#408](https://github.com/saya-ch/dsh-mobile/pull/408) 的兼容修复与 [#402](https://github.com/saya-ch/dsh-mobile/pull/402) 的推送调度修复；感谢 [@owenzhao](https://github.com/owenzhao) 在 [#400](https://github.com/saya-ch/dsh-mobile/issues/400) 提供实测与落点；感谢 [@rushpixy](https://github.com/rushpixy) 在 [#194](https://github.com/saya-ch/dsh-mobile/issues/194) 提出阅读体验问题，[@lnuxe](https://github.com/lnuxe) 提供 [#384](https://github.com/saya-ch/dsh-mobile/pull/384) 的阅读模式实现。
+
+Thanks [@chintoleung](https://github.com/chintoleung) for reporting Web Push being unavailable on DSH 0.2.2-rc.2 in [#407](https://github.com/saya-ch/dsh-mobile/issues/407), and for the compatibility fix in [#408](https://github.com/saya-ch/dsh-mobile/pull/408) and the push-scheduling fix in [#402](https://github.com/saya-ch/dsh-mobile/pull/402); thanks [@owenzhao](https://github.com/owenzhao) for the measurement and points in [#400](https://github.com/saya-ch/dsh-mobile/issues/400); thanks [@rushpixy](https://github.com/rushpixy) for the reading-experience report in [#194](https://github.com/saya-ch/dsh-mobile/issues/194), and [@lnuxe](https://github.com/lnuxe) for the reading-mode implementation in [#384](https://github.com/saya-ch/dsh-mobile/pull/384).
+
+## 0.8.7 贡献 / Contributions in 0.8.7
+
+感谢 [@eeeggplant](https://github.com/eeeggplant) 在 [#291](https://github.com/saya-ch/dsh-mobile/issues/291) 提供会话切换重复加载的测量与预取提案，[@lnuxe](https://github.com/lnuxe) 通过 [#383](https://github.com/saya-ch/dsh-mobile/pull/383) 实现可选的会话预取；原作者提交保留，维护者补充独立开关、跨 bundle 的偏好同步和网关参数契约。感谢 [@owenzhao](https://github.com/owenzhao) 在 [#390](https://github.com/saya-ch/dsh-mobile/issues/390) 报告后台提醒不投递并持续提供设备侧排查信息，在 [#394](https://github.com/saya-ch/dsh-mobile/issues/394) 指出点击任务通知会整页重载；两个问题仍在确认中，本版只提供诊断与页面侧准备，不表示已修复。感谢 [@LUgABeEEE](https://github.com/LUgABeEEE) 在 [#350](https://github.com/saya-ch/dsh-mobile/pull/350) 提供网关到期连接正常关闭、认证失败分类，以及 App 端按修订号缓存页面资源的实现与测量。感谢 [@pakeh2866](https://github.com/pakeh2866) 在 [#389](https://github.com/saya-ch/dsh-mobile/issues/389) 报告文件预览后无法返回，促成第三方全屏宿主的返回键契约文档；宿主自身的修复不在本仓库。
+
+Thanks [@eeeggplant](https://github.com/eeeggplant) for the session-switch measurement and prefetch proposal in [#291](https://github.com/saya-ch/dsh-mobile/issues/291), and [@lnuxe](https://github.com/lnuxe) for the implementation in [#383](https://github.com/saya-ch/dsh-mobile/pull/383); original commits are retained, with maintainer additions for the independent switch, cross-bundle preference sharing and the gateway argument contract. Thanks [@owenzhao](https://github.com/owenzhao) for the background-reminder non-delivery report and device-side diagnosis in [#390](https://github.com/saya-ch/dsh-mobile/issues/390), and for the full-page reload on a notification tap in [#394](https://github.com/saya-ch/dsh-mobile/issues/394); both remain under investigation, and this candidate only adds diagnostics and the page-side preparation, not a confirmed fix. Thanks [@LUgABeEEE](https://github.com/LUgABeEEE) for the orderly credential-expiry WebSocket close, the auth-failure categories and the App-side revisioned payload cache with its measurements in [#350](https://github.com/saya-ch/dsh-mobile/pull/350). Thanks [@pakeh2866](https://github.com/pakeh2866) for the file-preview Back report in [#389](https://github.com/saya-ch/dsh-mobile/issues/389), which prompted the Back-key contract for third-party full-screen hosts; the host's own change is not in this repository.
+
+## 0.8.6 贡献 / Contributions in 0.8.6
+
+感谢 [@mekswhy](https://github.com/mekswhy) 在 [#375](https://github.com/saya-ch/dsh-mobile/issues/375) 报告插件请求头被移动网关丢弃，[@lnuxe](https://github.com/lnuxe) 提供 [#376](https://github.com/saya-ch/dsh-mobile/pull/376) 的网关修复与 [#374](https://github.com/saya-ch/dsh-mobile/pull/374) 的通知导航实现；维护者保留原作者提交并补充安全过滤、完整长度校验、并发与真机验收路径。感谢 [@owenzhao](https://github.com/owenzhao) 在 [#371](https://github.com/saya-ch/dsh-mobile/issues/371)、[#372](https://github.com/saya-ch/dsh-mobile/issues/372)、[#373](https://github.com/saya-ch/dsh-mobile/issues/373) 和 [#377](https://github.com/saya-ch/dsh-mobile/issues/377) 提供通知链路场景、复现和边界说明。感谢 [@zustttt](https://github.com/zustttt) 在 [#379](https://github.com/saya-ch/dsh-mobile/issues/379) 定位 Windows 局域网一键配置失败的 PowerShell 参数集冲突。
+
+Thanks [@mekswhy](https://github.com/mekswhy) for reporting the mobile Gateway's dropped plugin request header in [#375](https://github.com/saya-ch/dsh-mobile/issues/375), and [@lnuxe](https://github.com/lnuxe) for the Gateway fix in [#376](https://github.com/saya-ch/dsh-mobile/pull/376) and notification navigation implementation in [#374](https://github.com/saya-ch/dsh-mobile/pull/374). Original commits are retained, with maintainer additions for security filtering, full-length validation, concurrency and device-acceptance paths. Thanks [@owenzhao](https://github.com/owenzhao) for the notification scenarios, reproductions and boundaries in [#371](https://github.com/saya-ch/dsh-mobile/issues/371), [#372](https://github.com/saya-ch/dsh-mobile/issues/372), [#373](https://github.com/saya-ch/dsh-mobile/issues/373) and [#377](https://github.com/saya-ch/dsh-mobile/issues/377). Thanks [@zustttt](https://github.com/zustttt) for diagnosing the PowerShell parameter-set conflict in [#379](https://github.com/saya-ch/dsh-mobile/issues/379).
+
+## 0.8.5 贡献 / Contributions for 0.8.5
+
+感谢 [@lyc0110](https://github.com/lyc0110) 在 [#364](https://github.com/saya-ch/dsh-mobile/issues/364) 报告 Windows 防火墙先删后建的风险，[@fgql](https://github.com/fgql) 在 [#365](https://github.com/saya-ch/dsh-mobile/issues/365) 提供 iroh 私有目录失败的完整诊断，[@LunarFeller](https://github.com/LunarFeller) 在 [#355](https://github.com/saya-ch/dsh-mobile/pull/355) 提供 macOS 完全磁盘访问提示及真机验证，[@chenForbear](https://github.com/chenForbear) 在 [#363](https://github.com/saya-ch/dsh-mobile/issues/363) 提供模块批次测量，[@chintoleung](https://github.com/chintoleung) 提供 [#367](https://github.com/saya-ch/dsh-mobile/pull/367) 的 catalog 缓存，以及 [@Kizaemon](https://github.com/Kizaemon) 在 [#368](https://github.com/saya-ch/dsh-mobile/issues/368) 报告 Desktop 更新配置档错误、在 [#369](https://github.com/saya-ch/dsh-mobile/issues/369) 完成 CGNAT 局域网诊断。
+
+Thanks [@lyc0110](https://github.com/lyc0110) for reporting the Windows firewall replacement risk in [#364](https://github.com/saya-ch/dsh-mobile/issues/364), [@fgql](https://github.com/fgql) for the detailed iroh private-directory diagnosis in [#365](https://github.com/saya-ch/dsh-mobile/issues/365), [@LunarFeller](https://github.com/LunarFeller) for the macOS Full Disk Access notice and device verification in [#355](https://github.com/saya-ch/dsh-mobile/pull/355), [@chenForbear](https://github.com/chenForbear) for the module-batch measurements in [#363](https://github.com/saya-ch/dsh-mobile/issues/363), [@chintoleung](https://github.com/chintoleung) for the catalog cache in [#367](https://github.com/saya-ch/dsh-mobile/pull/367), and [@Kizaemon](https://github.com/Kizaemon) for the Desktop profile-update reproduction in [#368](https://github.com/saya-ch/dsh-mobile/issues/368) and CGNAT LAN diagnosis in [#369](https://github.com/saya-ch/dsh-mobile/issues/369).
+
 ## 0.8.4 贡献 / Contributions for 0.8.4
 
 感谢 [@owenzhao](https://github.com/owenzhao) 在 [#361](https://github.com/saya-ch/dsh-mobile/issues/361) 报告相对重定向导致移动图片预览失败。感谢 [@aaalzk](https://github.com/aaalzk) 独立确认，以及 [@LUgABeEEE](https://github.com/LUgABeEEE) 在 [#362](https://github.com/saya-ch/dsh-mobile/pull/362) 提供折叠栏布局修复。原作者提交保留；维护者修正另记。
@@ -18,13 +52,13 @@ Thanks [@xaxka](https://github.com/xaxka) for the shared-FRP username in [#344](
 
 ## 0.8.2 贡献 / Contributions for 0.8.2
 
-感谢 [@LUgABeEEE](https://github.com/LUgABeEEE) 通过 [#343](https://github.com/saya-ch/dsh-mobile/pull/343) 修正 Android 固定证书的 WebSocket 地址判断。原作者提交保留；维护者补充完整证书决策组合回归。该原生改动归入独立编号的 Android 0.7.2 候选，不由 npm 升级替代。
+感谢 [@LUgABeEEE](https://github.com/LUgABeEEE) 通过 [#343](https://github.com/saya-ch/dsh-mobile/pull/343) 修正 Android 固定证书的 WebSocket 地址判断。原作者提交保留；维护者补充完整证书决策组合回归。该原生改动已随独立编号的 Android 0.7.2 发布，不由 npm 升级替代。
 
-Thanks [@LUgABeEEE](https://github.com/LUgABeEEE) for the Android pinned-WebSocket authority fix in [#343](https://github.com/saya-ch/dsh-mobile/pull/343). Original commits are retained alongside maintainer combined-certificate regressions. This native change belongs to the independently versioned Android 0.7.2 candidate, not an npm-only update.
+Thanks [@LUgABeEEE](https://github.com/LUgABeEEE) for the Android pinned-WebSocket authority fix in [#343](https://github.com/saya-ch/dsh-mobile/pull/343). Original commits are retained alongside maintainer combined-certificate regressions. This native change shipped in the independently versioned Android 0.7.2 release, not an npm-only update.
 
-感谢 [@LunarFeller](https://github.com/LunarFeller) 在 [#341](https://github.com/saya-ch/dsh-mobile/issues/341) 定位 FRP 接入模式的标题与 SSH 字段残留，并通过 [#342](https://github.com/saya-ch/dsh-mobile/pull/342) 提交修复；候选保留原作者提交，并补充浏览器回归。
+感谢 [@LunarFeller](https://github.com/LunarFeller) 在 [#341](https://github.com/saya-ch/dsh-mobile/issues/341) 定位 FRP 接入模式的标题与 SSH 字段残留，并通过 [#342](https://github.com/saya-ch/dsh-mobile/pull/342) 提交修复；发布保留原作者提交，并补充浏览器回归。
 
-Thanks [@LunarFeller](https://github.com/LunarFeller) for diagnosing the FRP attach-mode heading and SSH-field remnants in [#341](https://github.com/saya-ch/dsh-mobile/issues/341) and contributing the fix in [#342](https://github.com/saya-ch/dsh-mobile/pull/342). The candidate preserves the original commit and adds browser regression coverage.
+Thanks [@LunarFeller](https://github.com/LunarFeller) for diagnosing the FRP attach-mode heading and SSH-field remnants in [#341](https://github.com/saya-ch/dsh-mobile/issues/341) and contributing the fix in [#342](https://github.com/saya-ch/dsh-mobile/pull/342). The release preserves the original commit and adds browser regression coverage.
 
 感谢 [@madlogos](https://github.com/madlogos) 在[后续反馈](https://github.com/saya-ch/dsh-mobile/issues/337#issuecomment-6593356950)中指出最小加载后的设置访问与全量恢复问题，推动旧选择重启恢复流程的验收和说明。
 

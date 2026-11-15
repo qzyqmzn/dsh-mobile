@@ -14,7 +14,7 @@ Home Screen installation does not provide offline DSH: the computer, DSH and its
 
 - A capable iPhone/iPad Home Screen web app, opened in standalone mode, with the page-level `window.pushManager` API. The plugin detects capabilities rather than trusting a browser version string. Ordinary Safari tabs and unsupported browsers do not get a service-worker fallback.
 - A **stable, trusted HTTPS origin** and an existing DSH Mobile browser pairing. HTTP and continuing through a certificate warning are not supported push configurations. The Android app's private-CA pin does not make an iPhone browser trust that CA.
-- Plugin **0.8.0 or later** on the computer, with DSH and the Mobile Gateway for the exact HTTPS origin running. Packed push automation covers DSH **0.2.1-rc.2 / rc.3**; other versions depend on the required public services. Missing services disable push without disabling ordinary Mobile access.
+- Plugin **0.8.0 or later** on the computer, with DSH and the Mobile Gateway for the exact HTTPS origin running. Browser boot automation covers DSH **0.1.7-alpha.2 through 0.2.2-rc.3** (13 versions); the packed push automation covers **0.2.1-rc.2, 0.2.1-rc.3, 0.2.1-rc.5, 0.2.2-rc.1 and 0.2.2-rc.2**, while 0.2.2-rc.3 currently runs only the boot and compressed-mux checks and is not yet part of the packed push checks; on other versions push still depends on the required public services. Missing services disable push without disabling ordinary Mobile access.
 - Outbound access to Apple's push infrastructure from the host and phone. No Apple developer membership, notification SaaS account or new public inbound port is required. This feature does not create a VPN, change certificates, open a firewall or configure a proxy.
 
 A publicly trusted private HTTPS hostname is architecturally eligible. The phone must still reach that origin to install, enable, authenticate and open a conversation. Delivery over a private/Tailscale origin is **unverified**; do not expose a private backend just to try push. Random tunnel hostnames are unsuitable for stable installation consent: an origin change never migrates authorization or subscriptions automatically. For persistent addresses, see [Cloudflare named tunnels](<CLOUDFLARE_TUNNEL.en.md>) or [your own HTTPS reverse proxy](<SELF_HOSTED_ORIGIN.en.md>); configuring an address alone does not prove push delivery.
@@ -40,7 +40,7 @@ Safari and the installed app may have separate login state. This recovery is for
 
 Push is best effort, not an alarm service. Host sleep/shutdown, disabled origin, phone connectivity, Focus settings and platform scheduling can delay or prevent delivery.
 
-Closing the page does **not** disable saved push consent. Use **Disable** to stop future eligible sends; explicit logout and device revocation have the separate effects listed [below](<#consent-logout-and-revocation>). A notification tap may require login and never answers or approves anything; **Send test** opens the app root, not a conversation.
+Closing the page does **not** disable saved push consent. **Disable** stops future eligible sends but retains the browser subscription, avoiding an unusable replacement after a quick iOS unsubscribe/subscribe cycle; the next explicit Enable reuses the existing subscription. Explicit logout and device revocation have the separate effects listed [below](<#consent-logout-and-revocation>). A notification tap may require login and never answers or approves anything; **Send test** opens the app root, not a conversation.
 
 ## What can notify
 
@@ -64,7 +64,7 @@ Lock-screen text is generic and localized in English, Simplified Chinese or Ital
 | Action/event | Effect |
 | --- | --- |
 | Close the page or let its short login session expire | Saved push consent remains while persistent pairing authorization and the origin remain valid. Opening DSH still requires authentication. |
-| Select Disable | The host durably stops sending first, then the page best-effort unsubscribes only a subscription it owns. A failed browser unsubscribe does not restore host consent. |
+| Select Disable | Durably stop Host sends and revoke the registration while retaining the browser subscription in a non-delivering state for the next explicit Enable. Clear the subscription through browser site-data controls when required. |
 | Explicit Mobile logout | Disable this paired device's push on the current origin before clearing its short session; retain the pairing. A failed disable must not report a completed logout. |
 | Revoke/reset a device or let its persistent credential expire | Purge affected push registrations and queued work, including devices with no open page. |
 | Stop a Gateway/provider or change its origin | Stop that origin's sends. Other origins keep their own consent. Re-enabling on a new origin is explicit. |
@@ -79,6 +79,21 @@ A payload opens the same-origin root with an opaque delivery reference. The refe
 After the public Workspace and Session lists are ready, Mobile rechecks that the session exists and opens it through DSH's normal UI action. A resolved request can open its session with a neutral notice; a tap never answers, approves or reopens an old prompt. An expired, foreign, missing or deleted target gives a neutral unavailable/session-list fallback. Consuming the reference removes only its query parameter without forcing a reload.
 
 The browser chooses warm versus cold navigation; do not assume unsent drafts or in-flight sends survive every notification navigation. A fresh DSH launch may initially show the most recently active conversation; select the intended session manually when needed. The plugin does not register or unregister a service worker or cache authenticated pages/API data.
+
+## Host-plugin custom text
+
+A trusted computer-side plugin may depend on the `mobilePush` service and submit a Session, title and body for categories the user already enabled:
+
+```ts
+await ctx.mobilePush.notify({
+  sessionId,
+  title: 'Conversation name',
+  body: 'The response is ready',
+  category: 'response',
+})
+```
+
+Titles are limited to 80 characters and bodies to 200; control characters become spaces. The result reports how many recipient deliveries were newly queued. The Host still checks Session existence, pairing authorization, each device's category preference, registration limits, expiry and concurrency. A tap keeps the Gateway-generated opaque reference instead of putting the raw Session ID in the URL. Custom text remains in the private push state until delivery or at most 30 minutes of expiry; do not submit passwords, Tokens or content that must never leave the computer.
 
 ## Limits and delivery failures
 
@@ -97,6 +112,7 @@ The sender accepts only validated Apple HTTPS push endpoints, rejects redirects 
 | No row / unavailable | Check required page-level capability, trusted HTTPS, authenticated dedicated browser context and DSH public services. There is no worker or old-iOS fallback. |
 | Install guidance | Launch the Home Screen icon rather than an ordinary browser tab. |
 | Permission denied | Change the site's notification permission in system/browser settings, return to the app and make a new explicit Enable action. No prompt is forced. |
+| It says granted but the Home Screen app stays silent | iOS records notification permission at site level; a re-added Home Screen app can inherit `granted` without receiving an independent authorization. The settings row shows this site-level state. If Disable/Enable still produces no delivery, remove the Home Screen app, clear the site's data, then add and authorize it again; do not guess or silently recreate the current app's subscription. |
 | Registration failed / stale settings | Refresh/reopen to read current state, then explicitly retry. Do not repeatedly resubmit an old request. |
 | Existing subscription uses another application key | Do not automatically unsubscribe it. After a host key reset, retrying Enable alone will not fix this conflict; identify its owner and arrange deliberate browser-side repair. |
 | Suspended / repair-required | Check host key/configuration and private-file access. Do not delete paired-device state or silently replace VAPID keys. |
@@ -107,12 +123,12 @@ Lost/corrupt VAPID material with existing registrations fails closed. A host adm
 
 ## Independent channels and acceptance
 
-Android's native permission/SSE path and APK/signing remain unchanged. The independently maintained **dsh-ping** channel is not modified or automatically disabled; enabling both can produce separate alerts. Web Push adds no cross-channel deduplication or foreground suppression.
+Android's native permission/SSE path stays independent of iOS Web Push. A newer Android App can explicitly enable background reminders below Task notifications: a foreground service keeps the paired connection available after Android suspends the page. This requires an additional persistent notification and remains subject to foreground-service time limits, battery policy and connectivity; iroh does not participate in this background service yet. The independently maintained **dsh-ping** channel is not modified or automatically disabled; enabling both can produce separate alerts. Web Push adds no cross-channel deduplication or foreground suppression.
 
 For everyday setup, send a test notification first, then check the categories you need. Keep the existing Home Screen installation and pairing data; reopen the page after updating the computer plugin to load its new interface. See [contribution checks](<../CONTRIBUTING.md#select-behavior-checks>) for packed runtime validation and maintenance commands.
 
 ## Verification status
 
-This release accepts the contributor's development testing on **iPhone 17 Pro Max / iOS 27.0.1**, covering six notification categories, background/locked/closed-page delivery, taps, disable/revocation, offline windows and host restarts. The maintainer has not independently repeated Apple-device tests; no corresponding physical iPad or other device/OS record is available.
+Historical Web Push acceptance uses the contributor's development testing on **iPhone 17 Pro Max / iOS 27.0.1**, covering six notification categories, background/locked/closed-page delivery, taps, disable/revocation, offline windows and host restarts. The maintainer has not independently repeated Apple-device tests; no corresponding physical iPad or other device/OS record is available. Reusing a subscription after Disable and custom Host text still require physical iOS verification; Android background reminders have been verified on Debug build 0.7.3/build 88 (one device over a cloudflared public tunnel) for the foreground service, the persistent notification, a real completed-turn event arriving while backgrounded and locked, a tap opening the `dsh-session` conversation, and disabling the opt-in stopping the service and removing the notification; the official-signer APK, iroh, and other networks/OEMs remain unverified.
 
 Automation covers settings, authentication, encrypted payloads, tap ownership, restart and cleanup, not actual Apple delivery. The missing-target fixture uses a never-created session; a genuinely persisted-then-deleted session remains untested because the current public DSH API does not expose the needed delete operation. Push is best effort and does not replace manual confirmation of important tasks.

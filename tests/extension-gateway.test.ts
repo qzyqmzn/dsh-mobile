@@ -81,14 +81,14 @@ function pendingRequest(port: number, path: string, method: string, headers: Rec
   return { outgoing, result }
 }
 
-async function openEventStream(port: number, headers: Record<string, string>): Promise<{
+async function openEventStream(port: number, headers: Record<string, string>, path = '/mobile-access/extensions/events'): Promise<{
   readonly response: IncomingMessage
   readonly waitFor: (value: string) => Promise<string>
   readonly close: () => void
 }> {
   const response = await new Promise<IncomingMessage>((resolve, reject) => {
     const outgoing = requestHttp({
-      host: '127.0.0.1', port, path: '/mobile-access/extensions/events',
+      host: '127.0.0.1', port, path,
       method: 'GET', headers, agent: false,
     }, resolve)
     outgoing.once('error', reject)
@@ -560,6 +560,65 @@ describe('gateway extension namespace', () => {
     expect(eventBody).not.toContain(opened.token)
     expect(eventBody).not.toContain(pairedBody.csrfToken)
     expect(eventBody).not.toContain(session)
+
+    // Optional plugin-authored text rides beside the unchanged old keys.
+    gateway.broadcastTaskEvent({ sessionId: 'session-9', turn: 5, title: 'Session 9', body: 'Done.' })
+    const rich = await stream.waitFor('"turn":5')
+    const richData = JSON.parse(rich.slice(rich.lastIndexOf('data: ') + 'data: '.length).trim()) as Record<string, unknown>
+    expect(richData).toEqual({ sessionId: 'session-9', turn: 5, title: 'Session 9', body: 'Done.' })
+
+    // The gateway re-bounds the fields even when a caller bypasses the watcher,
+    // and it must count Unicode code points so an emoji is never split into a
+    // lone surrogate on the lock screen.
+    gateway.broadcastTaskEvent({ sessionId: 'session-9', turn: 6, title: '😀'.repeat(120), body: '😀'.repeat(300) })
+    const bounded = await stream.waitFor('"turn":6')
+    const boundedData = JSON.parse(bounded.slice(bounded.lastIndexOf('data: ') + 'data: '.length).trim()) as Record<string, string | number>
+    const boundedTitle = String(boundedData.title)
+    const boundedBody = String(boundedData.body)
+    expect(Array.from(boundedTitle)).toHaveLength(80)
+    expect(Array.from(boundedBody)).toHaveLength(200)
+    expect(boundedTitle).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u)
+    expect(boundedBody).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u)
+  })
+
+  it('serves task and revocation events to the native background stream without a document view', async () => {
+    const upstream = createServer((_, response) => { response.writeHead(200); response.end('ok') })
+    const upstreamPort = await listen(upstream)
+    cleanups.push(async () => { upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve())) })
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-background-events-'))
+    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    const context = new Context(); cleanups.push(() => context.fiber.dispose())
+    const service = new MobileAccessService(context)
+    const config = parseGatewayConfig({
+      listenHost: '127.0.0.1', listenPort: 0,
+      upstreamOrigin: `http://127.0.0.1:${String(upstreamPort)}`,
+      publicAuthorities: ['127.0.0.1'], allowedCidrs: ['127.0.0.0/8'],
+      stateFile: join(directory, 'devices.json'), tls: { mode: 'disabled' },
+    })
+    const gateway = new MobileAccessGateway(config, new MemoryDeviceStore(), service)
+    await gateway.start(); cleanups.push(() => gateway.close())
+    const origin = gateway.address().origin
+    const opened = await gateway.access.openPairing()
+    const paired = await request(gateway.address().port, '/mobile-access/auth/pair', {
+      method: 'POST',
+      headers: { host: new URL(origin).host, origin, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' },
+      body: JSON.stringify({ token: opened.token }),
+    })
+    const session = cookie(paired.headers, SESSION_COOKIE)
+    const headers = {
+      host: new URL(origin).host, origin, 'sec-fetch-site': 'same-origin', cookie: session,
+      accept: 'text/event-stream',
+    }
+    const stream = await openEventStream(gateway.address().port, headers, '/mobile-access/background-events')
+    cleanups.push(async () => { stream.close() })
+    expect(stream.response.statusCode).toBe(200)
+    await stream.waitFor(': ready')
+    gateway.broadcastTaskEvent({ sessionId: 'session-background', turn: 7 })
+    const eventBody = await stream.waitFor('event: task-notify')
+    expect(eventBody).toContain('data: {"sessionId":"session-background","turn":7}')
+    expect(eventBody).not.toContain(session)
+    const rejected = await request(gateway.address().port, '/mobile-access/background-events', { headers: { ...headers, cookie: '' } })
+    expect(rejected.status).toBe(401)
   })
 
   it('pushes credential-free extension changes and closes the stream when its device is revoked', async () => {    const upstream = createServer((_, response) => { response.writeHead(200); response.end('ok') })

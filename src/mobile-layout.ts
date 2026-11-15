@@ -1,14 +1,33 @@
 import { createElement, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
+import type { ComposerReadingModeHandle } from './composer-collapse.js'
 import { WIDE_LAYOUT_ATTRIBUTE } from './mobile-layout-attributes.js'
 import { MOBILE_LAYOUT_MESSAGES, type MobileLayoutLanguage } from './mobile-layout-messages.js'
+import {
+  installComposerReadingMode,
+  readComposerCollapseEnabled,
+  selectActiveSessionRunning,
+  subscribeComposerCollapseEnabled,
+} from './composer-collapse.js'
+import {
+  SESSION_PREFETCH_DEFAULTS,
+  SessionPrefetchTracker,
+  prefetchSession,
+  readSessionPrefetchEnabled,
+  sessionPrefetchConfigFrom,
+  subscribeSessionPrefetchEnabled,
+} from './session-prefetch.js'
 
 export { MOBILE_LAYOUT_MESSAGES } from './mobile-layout-messages.js'
 export type { MobileLayoutLanguage } from './mobile-layout-messages.js'
+export type { ComposerReadingModeHandle } from './composer-collapse.js'
+// Re-exported so the browser fixture can drive the shipped layout bundle directly;
+// this file already publishes the other DOM policies it installs.
+export { installComposerReadingMode, readComposerCollapseEnabled, selectActiveSessionRunning } from './composer-collapse.js'
 
 interface SessionState {
   readonly current?: string
-  readonly byId: Readonly<Record<string, { readonly blank?: boolean; readonly title?: string } | undefined>>
+  readonly byId: Readonly<Record<string, { readonly blank?: boolean; readonly title?: string; readonly running?: boolean } | undefined>>
 }
 
 interface MobileRootProps {
@@ -614,9 +633,22 @@ html,body,#root{width:100%;height:100%;overflow:hidden}
 .dshm-drawer{position:fixed;z-index:70;inset:0 auto 0 0;box-sizing:border-box;width:56px;max-width:100%;padding-top:env(safe-area-inset-top);overflow:hidden;background-color:Canvas;background-image:linear-gradient(var(--dsw-alias-bg-layer-1,#f8fafc),var(--dsw-alias-bg-layer-1,#f8fafc));box-shadow:none;will-change:width;transition:width 240ms cubic-bezier(.22,1,.36,1),box-shadow 240ms ease}
 .dshm-drawer[data-open=true]{width:min(88vw,340px);box-shadow:18px 0 46px rgb(15 23 42 / 18%)}
 .dshm-drawer[data-open=false]{pointer-events:auto;visibility:visible}
-.dshm-drawer>*{width:100%!important;height:100%!important;transform:translateX(-6px);opacity:.94;transition:transform 220ms cubic-bezier(.22,1,.36,1),opacity 160ms ease-out}
-.dshm-drawer[data-open=true]>*{transform:translateX(0);opacity:1}
-.dshm-drawer[data-open=false]>*{width:56px!important}
+/* Slide the sidebar content only while opening or closing. A resting transform
+   would make this child the containing block for stock fixed-position surfaces
+   inside the sidebar and let the drawer's overflow clip them (issue #413: the
+   Cordis plugin panel anchors itself to the viewport to escape that clip). */
+.dshm-drawer>*{width:100%!important;height:100%!important;opacity:.94;transition:opacity 160ms ease-out}
+.dshm-drawer[data-open=true]>*{opacity:1;animation:dshm-drawer-slide-open 220ms cubic-bezier(.22,1,.36,1)}
+.dshm-drawer[data-open=false]>*{width:56px!important;animation:dshm-drawer-slide-closed 220ms cubic-bezier(.22,1,.36,1)}
+@keyframes dshm-drawer-slide-open{from{transform:translateX(-6px)}to{transform:translateX(0)}}
+@keyframes dshm-drawer-slide-closed{from{transform:translateX(0)}to{transform:translateX(-6px)}}
+/* The Cordis plugin panel opens from the sidebar footer as a stock fixed surface
+   (position:fixed, width:420px, anchored from its trigger) so the sidebar's
+   overflow cannot clip it. On phones the drawer must give it real containment:
+   span the viewport instead of the desktop width, sit above our drawer but below
+   the stock floating slot layer (300), and cap the height so its body scrolls
+   (issue #413). */
+.dshm-shell:not([${WIDE_LAYOUT_ATTRIBUTE}="1"]) [data-cordis-panel]{position:fixed!important;inset:auto 8px max(8px,env(safe-area-inset-bottom)) 8px!important;width:auto!important;max-width:min(420px,calc(100vw - 16px))!important;max-height:min(60vh,calc(100dvh - 96px))!important;overflow-y:auto!important;z-index:210!important}
 /* Folded icon rail: on narrow viewports the drawer is fixed, so give the main
    content the same 56px offset the wide grid already provides. The width floor
    keeps phone-width headers on their own inset; the band itself is the root
@@ -691,7 +723,7 @@ body:has(.dshm-shell) :is(input,textarea,[contenteditable=true],[contenteditable
    dims and covers it. Only the wide grid needs this: on a phone the drawer is a
    floating overlay and must keep covering the conversation. */
 .dshm-shell[${WIDE_LAYOUT_ATTRIBUTE}="1"] .dshm-main{grid-area:1/2;z-index:1}
-@media(prefers-reduced-motion:reduce){.dshm-drawer,.dshm-details,.dshm-scrim,.dshm-drawer>*,.dshm-main{transition:none!important}}
+@media(prefers-reduced-motion:reduce){.dshm-drawer,.dshm-details,.dshm-scrim,.dshm-drawer>*,.dshm-main{transition:none!important}.dshm-drawer>*{animation:none!important}}
 /* Touch adaptation changes control boxes, not invisible hit regions. Root opt-out
    retains pane geometry too; nested opt-out preserves a widget's own controls.
    DSH's plugin cards open through a cardTitle/cardOpen button whose ::after
@@ -703,6 +735,17 @@ body:has(.dshm-shell) :is(input,textarea,[contenteditable=true],[contenteditable
 .dshm-main[data-dsh-panel="1"] [data-slot="main"]>:not([data-dsh-adapt="off"]) :is(button,[role="button"],select,input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=hidden]):not([type=color]):not([type=file]):not([type=image])):not([role="switch"],[role="checkbox"],[role="radio"],[role="slider"],button[class*="_cardTitle"][class*="_cardOpen"],[data-dsh-adapt="off"],[data-dsh-adapt="off"] *){min-width:44px!important;min-height:44px!important}
 .dshm-main[data-dsh-panel="1"] [data-slot="main"]>:not([data-dsh-adapt="off"]) :is(button,[role="button"],a):not([data-dsh-adapt="off"],[data-dsh-adapt="off"] *){touch-action:manipulation}
 }
+/* Reading mode (issue #194): after scrolling down a long conversation the
+   composer editor collapses so the reading area is unobstructed. The card stays
+   and keeps the upstream Send/Stop row; its generated label is the way back, and
+   the text comes from --dshm-composer-restore-label so nothing is injected into
+   the React-managed card. Opt-in, off by default. */
+[data-dsh-mobile-composer-collapsed="true"] [data-composer-card] :is([contenteditable="true"],[contenteditable="plaintext-only"],[contenteditable=""],textarea){display:none!important}
+[data-dsh-mobile-composer-collapsed="true"] [data-composer-card]{
+  padding-top:6px!important;padding-bottom:6px!important;min-height:0!important;cursor:pointer}
+[data-dsh-mobile-composer-collapsed="true"] [data-composer-card]::before{
+  content:var(--dshm-composer-restore-label, "");display:flex;align-items:center;
+  justify-content:center;min-height:44px;font-size:13px;opacity:.75;pointer-events:none}
 `
 
 function MobileAppFrame(props: MobileRootProps & {
@@ -783,6 +826,93 @@ function MobileAppFrame(props: MobileRootProps & {
     return current !== undefined && session.byId[current]?.blank === false ? current : undefined
   })
   const hasSession = activeSessionId !== undefined
+
+  // Warm DSH session-query's prepared-session cache for the session the user just
+  // left after a switch settles (issue #291). Opt-in via the session-prefetch
+  // configuration; silent, read-only and bounded so it never disturbs normal
+  // requests or live streams.
+  const prefetchEnabled = useSyncExternalStore(
+    subscribeSessionPrefetchEnabled,
+    readSessionPrefetchEnabled,
+    () => false,
+  )
+  const prefetchTracker = useRef<SessionPrefetchTracker | undefined>(undefined)
+  const prefetchTimer = useRef<number | undefined>(undefined)
+  const prefetchDispose = useRef<(() => void) | undefined>(undefined)
+  // Rebuild the tracker when the opt-in flips: the switch is part of the config,
+  // and a stale tracker would keep answering `skip('disabled')` (or keep warming
+  // after the user turned it off).
+  if (prefetchTracker.current === undefined || prefetchTracker.current.enabled !== prefetchEnabled) {
+    prefetchTracker.current = new SessionPrefetchTracker(sessionPrefetchConfigFrom(prefetchEnabled))
+  }
+  useEffect(() => {
+    if (activeSessionId === undefined) return
+    const decision = prefetchTracker.current!.switchTo(activeSessionId)
+    if (decision.action !== 'warm') return
+    const target = decision.target
+    if (prefetchTimer.current !== undefined) clearTimeout(prefetchTimer.current)
+    prefetchTimer.current = window.setTimeout(() => {
+      prefetchTimer.current = undefined
+      // Keep the disposer: leaving the session (or unmounting) should abort a
+      // request that would otherwise run to its timeout in the background.
+      prefetchDispose.current?.()
+      prefetchDispose.current = prefetchSession(fetch, target, SESSION_PREFETCH_DEFAULTS.timeoutMs)
+    }, SESSION_PREFETCH_DEFAULTS.settleMs)
+    return () => {
+      if (prefetchTimer.current !== undefined) { clearTimeout(prefetchTimer.current); prefetchTimer.current = undefined }
+      prefetchDispose.current?.()
+      prefetchDispose.current = undefined
+    }
+  }, [activeSessionId, prefetchEnabled])
+  // Reading mode (issue #194): while the user scrolls down a long conversation,
+  // collapse the composer editor so the reading area is unobstructed; tapping the
+  // collapsed card, focusing the composer, opening the keyboard, scrolling back up,
+  // having a draft, or a running reply expands it again. Opt-in, off by default
+  // (see COMPOSER_COLLAPSE_DEFAULTS). The composer and its draft stay owned by DSH;
+  // this only toggles presentation.
+  //
+  // The switch is read from the persisted flag rather than a module singleton: the
+  // settings row ships in the client bundle while this file is inlined into the
+  // layout bundle, so two copies would each hold their own value and the toggle
+  // would only apply after a reload.
+  const collapseEnabled = useSyncExternalStore(
+    subscribeComposerCollapseEnabled,
+    readComposerCollapseEnabled,
+    () => false,
+  )
+  // A running reply is not a composer phase: DSH reports it on the Session summary,
+  // and data-phase returns to plain as soon as the submission is accepted, so the
+  // phase alone would let the composer vanish mid-stream. Read the real flag.
+  const activeRunning = props.useSessions(selectActiveSessionRunning)
+  const runningRef = useRef(activeRunning)
+  runningRef.current = activeRunning
+  const active = collapseEnabled && hasSession
+  const readingMode = useRef<ComposerReadingModeHandle | undefined>(undefined)
+  // The DOM wiring lives in installComposerReadingMode so the scroll container,
+  // the dead zone and the guards can be driven in a browser fixture, not only
+  // asserted from source text.
+  useEffect(() => {
+    if (!active) return
+    const installed = installComposerReadingMode({
+      restoreLabel: messages.composerRestore,
+      isRunning: () => runningRef.current,
+    })
+    readingMode.current = installed
+    if (runningRef.current) installed.expand()
+    return () => {
+      readingMode.current = undefined
+      installed.dispose()
+    }
+    // activeSessionId tears the mode down and reinstalls it, so a collapse never
+    // leaks into the next conversation and the new scroller starts bound.
+  }, [active, activeSessionId, messages.composerRestore])
+  useEffect(() => {
+    if (!activeRunning) return
+    // Reset the dead zone too: without this the next downward scroll immediately
+    // re-collapses the composer the user just came back for.
+    readingMode.current?.expand()
+    document.documentElement.setAttribute('data-dsh-mobile-composer-collapsed', 'false')
+  }, [activeRunning])
 
   useEffect(() => {
     const observer = new MutationObserver(() => { setDocumentLanguage(document.documentElement.lang) })

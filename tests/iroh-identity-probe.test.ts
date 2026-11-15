@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { defaultResolveIdentity } from '../src/iroh.js'
+import { defaultResolveIdentity, IrohIdentityProbeError } from '../src/iroh.js'
 
 const probe = fileURLToPath(new URL('./fixtures/iroh-identity-probe.mjs', import.meta.url))
 const ENDPOINT = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
@@ -61,6 +61,14 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch { return false }
 }
 
+/** Poll until the pid disappears; a single sample can race a still-closing process. */
+async function waitUntilGone(pid: number, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (alive(pid) && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+}
+
 describe('iroh identity probe lifecycle', () => {
   it('reports a failed termination instead of claiming a stopped probe', async () => {
     const root = await ownedRoot()
@@ -90,12 +98,151 @@ describe('iroh identity probe lifecycle', () => {
     expect(alive(await publishedPid(marker))).toBe(false)
   })
 
-  it('rejects a non-hex id, a nonzero exit and invalid UTF-8 as invalid', async () => {
+  it('distinguishes malformed metadata from a failed probe', async () => {
     const root = await ownedRoot()
-    for (const mode of ['bad-id', 'exit-nonzero', 'invalid-utf8']) {
+    for (const mode of ['bad-id', 'invalid-utf8']) {
       await expect(defaultResolveIdentity('sidecar', root, { launch: launch(mode, join(root, `pid-${mode}`)) }))
         .rejects.toThrow('iroh_identity_invalid')
     }
+    await expect(defaultResolveIdentity('sidecar', root, { launch: launch('exit-nonzero', join(root, 'pid-exit-nonzero')) }))
+      .rejects.toThrow('iroh_identity_invalid')
+  })
+
+  it('classifies an unsafe Windows profile and retains the native explanation', async () => {
+    const root = await ownedRoot()
+    const failure = await defaultResolveIdentity('sidecar', root, {
+      launch: launch('unsafe-directory', join(root, 'pid-unsafe-directory')),
+    }).catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(IrohIdentityProbeError)
+    expect(failure).toMatchObject({
+      code: 'iroh_data_directory_insecure',
+      diagnostic: expect.stringContaining('private path ACL grants access or replacement rights to another principal'),
+    })
+  })
+
+  it('uses the local-only host cause chain when tls-prepare hides the native explanation', async () => {
+    const root = await ownedRoot()
+    const marker = join(root, 'pid-generic-tls-failure')
+    const failure = await defaultResolveIdentity('sidecar', root, {
+      launch: (_executable, args) => spawn(process.execPath, [
+        probe,
+        args.includes('tls-prepare') ? 'generic-tls-failure' : 'host-unsafe-directory',
+        marker,
+      ], { stdio: ['pipe', 'pipe', 'pipe'] as const, windowsHide: true }),
+    }).catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(IrohIdentityProbeError)
+    expect(failure).toMatchObject({
+      code: 'iroh_data_directory_insecure',
+      diagnostic: expect.stringContaining('private path ACL grants access or replacement rights to another principal'),
+    })
+  })
+
+  it('recognizes the wrapper when the sidecar ends its stderr line with CRLF', async () => {
+    const root = await ownedRoot()
+    const marker = join(root, 'pid-crlf')
+    const failure = await defaultResolveIdentity('sidecar', root, {
+      launch: (_executable, args) => spawn(process.execPath, [
+        probe,
+        args.includes('tls-prepare') ? 'generic-tls-failure-crlf' : 'host-unsafe-directory',
+        marker,
+      ], { stdio: ['pipe', 'pipe', 'pipe'] as const, windowsHide: true }),
+    }).catch((error: unknown) => error)
+    // Windows-native tooling emits CRLF; a bare wrapper must still be expanded
+    // by the local-only host probe instead of being reported verbatim.
+    expect(failure).toMatchObject({
+      code: 'iroh_data_directory_insecure',
+      diagnostic: expect.stringContaining('private path ACL grants access or replacement rights to another principal'),
+    })
+  })
+
+  it('recognizes the wrapper when an unrelated diagnostic line precedes it', async () => {
+    const root = await ownedRoot()
+    const marker = join(root, 'pid-prefixed')
+    const failure = await defaultResolveIdentity('sidecar', root, {
+      launch: (_executable, args) => spawn(process.execPath, [
+        probe,
+        args.includes('tls-prepare') ? 'generic-tls-failure-prefixed' : 'host-unsafe-directory',
+        marker,
+      ], { stdio: ['pipe', 'pipe', 'pipe'] as const, windowsHide: true }),
+    }).catch((error: unknown) => error)
+    // The wrapper is still the only explanation for the failure, so a prefix
+    // such as a warning must not swallow the local-only host's cause chain.
+    expect(failure).toMatchObject({
+      code: 'iroh_data_directory_insecure',
+      diagnostic: expect.stringContaining('private path ACL grants access or replacement rights to another principal'),
+    })
+  })
+
+  it('does not rerun the host for an unrelated tls-prepare failure', async () => {
+    const root = await ownedRoot()
+    const marker = join(root, 'pid-unrelated')
+    const failure = await defaultResolveIdentity('sidecar', root, {
+      launch: (_executable, args) => spawn(process.execPath, [
+        probe,
+        args.includes('tls-prepare') ? 'unrelated-failure' : 'host-unsafe-directory',
+        marker,
+      ], { stdio: ['pipe', 'pipe', 'pipe'] as const, windowsHide: true }),
+    }).catch((error: unknown) => error)
+    expect(failure).toMatchObject({
+      code: 'iroh_identity_invalid',
+      diagnostic: expect.stringContaining('cannot open profile lock'),
+    })
+    // The fallback host advertises itself; its marker must not exist, or an
+    // unrelated error would be reclassified by a second, unrelated probe.
+    expect(await exists(`${marker}.host`)).toBe(false)
+  })
+
+  it('bounds the fallback diagnostic and terminates the host it started', async () => {
+    const root = await ownedRoot()
+    const marker = join(root, 'pid-host-hang')
+    const started = Date.now()
+    const failure = await defaultResolveIdentity('sidecar', root, {
+      launch: (_executable, args) => spawn(process.execPath, [
+        probe,
+        args.includes('tls-prepare') ? 'generic-tls-failure' : 'host-hang',
+        marker,
+      ], { stdio: ['pipe', 'pipe', 'pipe'] as const, windowsHide: true }),
+    }).catch((error: unknown) => error)
+    const elapsed = Date.now() - started
+    expect(failure).toMatchObject({ code: 'iroh_identity_invalid' })
+    // The fallback spends its own bounded budget, so the whole failure has to
+    // surface after that budget instead of waiting forever on an idle host.
+    expect(elapsed).toBeGreaterThanOrEqual(5_000)
+    expect(elapsed).toBeLessThan(15_000)
+    const hostPid = await publishedPid(`${marker}.host`)
+    await waitUntilGone(hostPid)
+    expect(alive(hostPid)).toBe(false)
+  }, 30_000)
+
+  it('closes stdin for the fallback host so it cannot idle forever', async () => {
+    const root = await ownedRoot()
+    const marker = join(root, 'pid-host-stdin')
+    const started = Date.now()
+    const failure = await defaultResolveIdentity('sidecar', root, {
+      launch: (_executable, args) => spawn(process.execPath, [
+        probe,
+        args.includes('tls-prepare') ? 'generic-tls-failure' : 'host-wait-stdin',
+        marker,
+      ], { stdio: ['pipe', 'pipe', 'pipe'] as const, windowsHide: true }),
+    }).catch((error: unknown) => error)
+    // host-wait-stdin only reports its cause after stdin reaches EOF, which the
+    // coordinator performs. Without that close this would burn the 5s budget.
+    expect(Date.now() - started).toBeLessThan(4_000)
+    expect(failure).toMatchObject({
+      code: 'iroh_data_directory_insecure',
+      diagnostic: expect.stringContaining('private path ACL grants access or replacement rights to another principal'),
+    })
+    await waitUntilGone(await publishedPid(`${marker}.host`))
+  }, 20_000)
+
+  it('truncates an oversized stderr diagnostic instead of buffering it', async () => {
+    const root = await ownedRoot()
+    const failure = await defaultResolveIdentity('sidecar', root, {
+      launch: launch('oversized-stderr', join(root, 'pid-oversized-stderr')),
+    }).catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(IrohIdentityProbeError)
+    expect((failure as IrohIdentityProbeError).code).toBe('iroh_identity_invalid')
+    expect((failure as IrohIdentityProbeError).diagnostic).toHaveLength(4_096)
   })
 
   it('does not report a timeout before the probe has actually exited', async () => {

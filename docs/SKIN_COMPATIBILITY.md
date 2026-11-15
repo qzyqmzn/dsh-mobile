@@ -1,6 +1,6 @@
 # 皮肤与移动布局
 
-[English](SKIN_COMPATIBILITY.en.md) · [第三方插件适配](../README.md#第三方插件适配)
+[English](SKIN_COMPATIBILITY.en.md) · [第三方插件适配](../README.md#功能一览)
 
 DSH Mobile 在已认证的移动页面中使用专用根布局，继续渲染 DSH 的会话、侧栏、设置和公共插槽；电脑页面不变。皮肤的公共主题变量可继续被组件使用，但依赖原生 CSS 模块类名或特定父节点的背景、人物及侧栏装饰不一定适用。
 

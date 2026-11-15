@@ -1,8 +1,9 @@
 {
   "name": "dsh-mobile",
-  "version": "0.8.4",
+  "version": "0.8.9",
   "private": false,
   "description": "DeepSeek Harness 移动端适配与安全访问插件，支持局域网、远程连接、Android App 和手机浏览器。",
+  "icon": "assets/brand/plugin-icon.png",
   "type": "module",
   "workspaces": [
     "packages/question-fixes"
@@ -10,12 +11,12 @@
   "bin": {
     "dsh-mobile": "lib/cli.js"
   },
-  "main": "./lib/index.mjs",
+  "main": "./index.mjs",
   "types": "./lib/index.d.mts",
   "exports": {
     ".": {
       "types": "./lib/index.d.mts",
-      "default": "./lib/index.mjs"
+      "default": "./index.mjs"
     },
     "./client": {
       "default": "./lib/client.js"
@@ -23,6 +24,7 @@
     "./package.json": "./package.json"
   },
   "files": [
+    "index.mjs",
     "lib/**/*.mjs",
     "lib/cli.js",
     "lib/**/*.d.mts",
@@ -42,6 +44,7 @@
     "assets/mobile-push/icon-180.png",
     "assets/mobile-push/icon-192.png",
     "assets/mobile-push/icon-512.png",
+    "assets/brand/plugin-icon.png",
     "cordis.patch.yml",
     "README.md",
     "README.en.md",
@@ -113,6 +116,7 @@
     "build:iroh-host": "node ./scripts/build-iroh-host.mjs",
     "check:funnel-licenses": "node ./scripts/funnel-third-party-licenses.mjs",
     "check:funnel-licenses:full": "node ./scripts/funnel-third-party-licenses.mjs --full-check",
+    "check:notices": "node ./scripts/check-third-party-notices.mjs",
     "check:mobile-release": "node ./scripts/check-mobile-release.mjs",
     "check:dsh-compatibility": "node ./scripts/check-dsh-compatibility.mjs",
     "smoke:dsh-boot": "node ./scripts/smoke-dsh-mobile-boot.mjs",
@@ -136,6 +140,7 @@
     "smoke:push-settings": "node ./scripts/smoke-mobile-push-settings.mjs",
     "smoke:voice-session": "node ./scripts/smoke-voice-session.mjs",
     "smoke:composer-keyboard": "node ./scripts/smoke-composer-keyboard.mjs",
+    "smoke:composer-reading-mode": "node ./scripts/smoke-composer-reading-mode.mjs",
     "smoke:mobile-compat": "node ./scripts/smoke-mobile-compat.mjs",
     "smoke:boot-feedback": "node ./scripts/smoke-mobile-boot-feedback.mjs",
     "smoke:composer-overflow": "node ./scripts/smoke-composer-overflow.mjs",
@@ -166,10 +171,11 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "prepack": "npm run check:version && npm run check:docs && npm run check:funnel-licenses && npm run build",
-    "verify": "npm run check:version && npm run check:docs && npm run check:companion-package && npm run check:funnel-licenses && npm run check:mobile-release && npm run typecheck && npm run test && npm run build && npm pack --dry-run",
+    "verify": "npm run check:version && npm run check:docs && npm run check:companion-package && npm run check:funnel-licenses && npm run check:notices && npm run check:mobile-release && npm run typecheck && npm run test && npm run build && npm pack --dry-run",
     "smoke:plugin-portal-layers": "node ./scripts/smoke-plugin-portal-layers.mjs",
     "smoke:opaque-chrome": "node ./scripts/smoke-opaque-chrome.mjs",
-    "smoke:rightbar-fullscreen": "node ./scripts/smoke-rightbar-fullscreen.mjs"
+    "smoke:rightbar-fullscreen": "node ./scripts/smoke-rightbar-fullscreen.mjs",
+    "smoke:path-copy": "node ./scripts/smoke-path-copy.mjs"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

@@ -1,6 +1,6 @@
 # 电脑端扩展 Worker 模式
 
-[English](EXTENSION_WORKERS.en.md) · [返回定制功能](../README.md#扩展与自定义)
+[English](EXTENSION_WORKERS.en.md) · [返回定制功能](../README.md#扩展与设备)
 
 > 插件 0.6.3 新增功能，由电脑端插件实现，不要求 App 同步版本或重新配对。
 
