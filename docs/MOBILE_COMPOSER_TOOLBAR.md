@@ -1,6 +1,6 @@
 # 移动输入栏布局
 
-[English](MOBILE_COMPOSER_TOOLBAR.en.md) · [第三方插件适配](../README.md#第三方插件适配)
+[English](MOBILE_COMPOSER_TOOLBAR.en.md) · [第三方插件适配](../README.md#功能一览)
 
 > 窄屏输入栏的紧凑与换行自插件 0.6.0 起提供，工具栏布局修正自 0.6.3 起提供，公共插槽包装层的触摸目标修正自 0.6.4 起提供。Android App 与手机浏览器使用插件提供的页面，不需要为这些网页改动重装 App。
 
