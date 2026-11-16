@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="170" viewBox="0 0 1200 170"
+     role="img" aria-labelledby="title desc">
+  <title id="title">四步连上：装插件、开局域网、扫码、自动重连</title>
+  <desc id="desc">第一步电脑装插件，第二步打开移动访问局域网，第三步手机扫码配对，第四步以后自动发现重连。</desc>
+
+  <rect width="1200" height="170" rx="24" fill="#0A1030"/>
+
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif">
+    <g id="s1" transform="translate(56 35)">
+      <circle cx="28" cy="28" r="28" fill="#35C4FF"/>
+      <text x="28" y="39" font-size="30" font-weight="900" text-anchor="middle" fill="#06283F">1</text>
+      <text x="72" y="32" font-size="26" font-weight="700" fill="#F2F7FF">电脑装插件</text>
+      <text x="72" y="62" font-size="20" fill="#9FB8DC">dsh plugin add</text>
+    </g>
+    <g id="s2" transform="translate(336 35)">
+      <circle cx="28" cy="28" r="28" fill="#35C4FF"/>
+      <text x="28" y="39" font-size="30" font-weight="900" text-anchor="middle" fill="#06283F">2</text>
+      <text x="72" y="32" font-size="26" font-weight="700" fill="#F2F7FF">打开局域网</text>
+      <text x="72" y="62" font-size="20" fill="#9FB8DC">移动访问面板</text>
+    </g>
+    <g id="s3" transform="translate(616 35)">
+      <circle cx="28" cy="28" r="28" fill="#35C4FF"/>
+      <text x="28" y="39" font-size="30" font-weight="900" text-anchor="middle" fill="#06283F">3</text>
+      <text x="72" y="32" font-size="26" font-weight="700" fill="#F2F7FF">手机扫码配对</text>
+      <text x="72" y="62" font-size="20" fill="#9FB8DC">App / 浏览器</text>
+    </g>
+    <g id="s4" transform="translate(896 35)">
+      <circle cx="28" cy="28" r="28" fill="#3DDC84"/>
+      <text x="28" y="39" font-size="30" font-weight="900" text-anchor="middle" fill="#06283F">4</text>
+      <text x="72" y="32" font-size="26" font-weight="700" fill="#F2F7FF">以后自动连</text>
+      <text x="72" y="62" font-size="20" fill="#3DDC84">同一 Origin 续期</text>
+    </g>
+    <g stroke="#35C4FF" stroke-width="3" opacity="0.5">
+      <line x1="300" y1="63" x2="328" y2="63"/>
+      <line x1="580" y1="63" x2="608" y2="63"/>
+      <line x1="872" y1="63" x2="900" y2="63"/>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="400" viewBox="0 0 1200 400"
+     role="img" aria-labelledby="title desc">
+  <title id="title">DSH Mobile 工作原理：手机经移动网关回环代理连接电脑端 DSH</title>
+  <desc id="desc">手机通过局域网或远程 HTTPS 到达移动网关，网关做设备配对、改写首页启动清单、其余请求透传，经本机回环代理到原生 DSH，不修改 DSH 源码。</desc>
+
+  <rect width="1200" height="400" rx="28" fill="#0A1030"/>
+
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif">
+    <!-- 手机 -->
+    <g id="phone" transform="translate(64 96)">
+      <rect x="0" y="0" width="168" height="208" rx="28" fill="#101B4D" stroke="#35C4FF" stroke-width="3"/>
+      <rect x="24" y="24" width="120" height="110" rx="10" fill="#2E9BFF" opacity="0.3"/>
+      <text x="84" y="172" font-size="24" font-weight="700" text-anchor="middle" fill="#F2F7FF">手机</text>
+      <text x="84" y="196" font-size="16" text-anchor="middle" fill="#9FB8DC">App / 浏览器</text>
+    </g>
+    <!-- 链路1 -->
+    <g id="link1">
+      <path d="M240 200 H344" stroke="#35C4FF" stroke-width="4"/>
+      <circle cx="292" cy="200" r="8" fill="#35C4FF"/>
+      <path d="M332 188 l14 12 l-14 12" stroke="#35C4FF" stroke-width="4" fill="none" stroke-linecap="round"/>
+      <text x="292" y="168" font-size="20" text-anchor="middle" fill="#35C4FF">HTTPS</text>
+    </g>
+    <!-- 网关 -->
+    <g id="gateway" transform="translate(360 56)">
+      <rect x="0" y="0" width="400" height="288" rx="24" fill="#12204A" stroke="#35C4FF" stroke-width="3"/>
+      <text x="200" y="52" font-size="30" font-weight="800" text-anchor="middle" fill="#F2F7FF">移动网关 Gateway</text>
+      <g font-size="22" fill="#C9D9F2">
+        <rect x="28" y="76" width="344" height="56" rx="14" fill="#35C4FF" opacity="0.12"/>
+        <circle cx="56" cy="104" r="7" fill="#35C4FF"/>
+        <text x="76" y="112">设备配对 + 私有 HTTPS</text>
+        <rect x="28" y="142" width="344" height="56" rx="14" fill="#35C4FF" opacity="0.22"/>
+        <circle cx="56" cy="170" r="7" fill="#35C4FF"/>
+        <text x="76" y="178" font-weight="700" fill="#FFFFFF">只改写首页启动清单</text>
+        <rect x="28" y="208" width="344" height="56" rx="14" fill="#35C4FF" opacity="0.12"/>
+        <circle cx="56" cy="236" r="7" fill="#35C4FF"/>
+        <text x="76" y="244">其余请求原样透传</text>
+      </g>
+    </g>
+    <!-- 链路2 -->
+    <g id="link2">
+      <path d="M776 200 H880" stroke="#3DDC84" stroke-width="4" stroke-dasharray="12 8"/>
+      <path d="M868 188 l14 12 l-14 12" stroke="#3DDC84" stroke-width="4" fill="none" stroke-linecap="round"/>
+      <text x="828" y="168" font-size="20" text-anchor="middle" fill="#3DDC84">回环</text>
+    </g>
+    <!-- DSH -->
+    <g id="dsh" transform="translate(896 96)">
+      <rect x="0" y="0" width="240" height="208" rx="24" fill="#101B4D" stroke="#3DDC84" stroke-width="3"/>
+      <text x="120" y="92" font-size="56" font-weight="900" text-anchor="middle" fill="#3DDC84">D</text>
+      <text x="120" y="140" font-size="24" font-weight="700" text-anchor="middle" fill="#F2F7FF">原生 DSH</text>
+      <text x="120" y="172" font-size="18" text-anchor="middle" fill="#9FB8DC">源码一行不改</text>
+    </g>
+  </g>
+</svg>

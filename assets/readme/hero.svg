@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="360" viewBox="0 0 1200 360"
+     role="img" aria-labelledby="title desc">
+  <title id="title">DSH Mobile</title>
+  <desc id="desc">DeepSeek Harness 社区插件：在手机上安全、实时地使用电脑中的 DeepSeek Harness。手机经移动网关回环代理连接电脑端 DSH。</desc>
+
+  <rect width="1200" height="360" rx="28" fill="#0A1030"/>
+  <circle cx="1050" cy="60" r="220" fill="#2E9BFF" opacity="0.12"/>
+
+  <!-- title block -->
+  <g id="title-block" transform="translate(64 56)">
+    <text x="0" y="0" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="22" font-weight="600" letter-spacing="4" fill="#35C4FF">DEEPSEEK HARNESS 社区插件</text>
+    <text x="0" y="92" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="72" font-weight="900" fill="#F2F7FF">DSH Mobile</text>
+    <text x="0" y="150" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="30" font-weight="600" fill="#F2F7FF">在手机上安全、实时地使用电脑中的</text>
+    <text x="0" y="192" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="30" font-weight="600" fill="#35C4FF">DeepSeek Harness</text>
+    <text x="0" y="236" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="20" fill="#9FB8DC">dsh plugin add dsh-mobile · 扫码配对 · Apache-2.0</text>
+    <!-- QR-corner motif -->
+    <g stroke="#35C4FF" stroke-width="5" fill="none" stroke-linecap="round" opacity="0.9">
+      <path d="M0 288 v-24 h24"/>
+      <path d="M120 264 h-24 v24"/>
+    </g>
+    <rect x="24" y="276" width="72" height="12" rx="6" fill="#35C4FF" opacity="0.35"/>
+  </g>
+
+  <!-- mini link: phone -> gateway -> DSH -->
+  <g id="mini-link" transform="translate(740 84)" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif">
+    <rect x="0" y="40" width="104" height="168" rx="22" fill="#101B4D" stroke="#35C4FF" stroke-width="2.5"/>
+    <rect x="14" y="56" width="76" height="96" rx="8" fill="#2E9BFF" opacity="0.25"/>
+    <text x="52" y="186" font-size="19" text-anchor="middle" fill="#9FB8DC">手机</text>
+    <path d="M112 124 H164" stroke="#35C4FF" stroke-width="3"/>
+    <circle cx="138" cy="124" r="6" fill="#35C4FF"/>
+    <rect x="172" y="20" width="120" height="208" rx="18" fill="#12204A" stroke="#35C4FF" stroke-width="2.5"/>
+    <text x="232" y="60" font-size="20" font-weight="700" text-anchor="middle" fill="#F2F7FF">网关</text>
+    <rect x="188" y="80" width="88" height="26" rx="13" fill="#35C4FF" opacity="0.25"/>
+    <rect x="188" y="114" width="88" height="26" rx="13" fill="#35C4FF" opacity="0.4"/>
+    <rect x="188" y="148" width="88" height="26" rx="13" fill="#35C4FF" opacity="0.18"/>
+    <text x="232" y="202" font-size="18" text-anchor="middle" fill="#9FB8DC">配对·改写·透传</text>
+    <path d="M300 124 H316" stroke="#3DDC84" stroke-width="3" stroke-dasharray="8 6"/>
+    <rect x="324" y="64" width="72" height="120" rx="16" fill="#101B4D" stroke="#3DDC84" stroke-width="2.5"/>
+    <text x="360" y="124" font-size="34" font-weight="900" text-anchor="middle" fill="#3DDC84">D</text>
+    <text x="360" y="158" font-size="18" text-anchor="middle" fill="#9FB8DC">DSH</text>
+  </g>
+</svg>
